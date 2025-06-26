@@ -1,0 +1,1770 @@
+import pathlib
+from datetime import timedelta, datetime
+from typing import Optional, List
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+from itertools import islice
+
+from granarypredict import cleaning, features, model as model_utils
+from granarypredict.config import ALERT_TEMP_THRESHOLD, MODELS_DIR
+from granarypredict import ingestion
+from granarypredict.data_utils import comprehensive_sort, assign_group_id
+from granarypredict.data_organizer import organize_mixed_csv
+import tempfile
+
+# Streamlit reload may have stale module; fetch grain thresholds safely
+try:
+    from granarypredict.config import GRAIN_ALERT_THRESHOLDS  # type: ignore
+except ImportError:
+    GRAIN_ALERT_THRESHOLDS = {}
+
+from sklearn.metrics import r2_score
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
+from lightgbm import LGBMRegressor
+from sklearn.multioutput import MultiOutputRegressor  # NEW
+
+# ---------------------------------------------------------------------
+# Debug helper – collects messages in session state
+# ---------------------------------------------------------------------
+
+# Defined early so it's available everywhere
+
+def _d(msg):
+    if not st.session_state.get("debug_mode"):
+        return
+    import streamlit as _st
+    _st.toast(f"🛠️ {msg}")
+    log = _st.session_state.setdefault("debug_msgs", [])
+    log.append(str(msg))
+
+# Add constant after imports
+ENV_COLUMNS = [
+    "temperature_inside",
+    "temperature_outside",
+    "humidity_warehouse",
+    "humidity_outside",
+]
+
+# Additional columns unavailable for real future dates that should be
+# removed when training a "future-safe" model.
+FUTURE_SAFE_EXTRA = [
+    "max_temp",      # historic max air temp inside silo
+    "min_temp",      # historic min inside temp
+    "line_no",       # production line identifier (constant, but 0-filled in future)
+    "layer_no",      # vertical layer identifier (constant, but 0-filled in future)
+]
+
+# Preset horizons (days) for quick selector controls
+PRESET_HORIZONS = [7, 14, 30, 90, 180, 365]
+
+# Target column representing daily average grain temperature for evaluation/forecast
+TARGET_TEMP_COL = "temperature_grain"  # per-sensor target for model & metrics
+
+# Utility to detect if a model is "future-safe" by filename convention (contains 'fs_')
+def is_future_safe_model(model_name: str) -> bool:
+    return "fs_" in model_name.lower()
+
+st.set_page_config(page_title="SiloFlow", layout="wide")
+
+
+
+# Directory that holds bundled sample CSVs shipped with the repo
+PRELOADED_DATA_DIR = pathlib.Path("data/preloaded")
+
+# Directory that holds bundled pre-trained models
+PRELOADED_MODEL_DIR = MODELS_DIR / "preloaded"
+
+# Ensure directory exists so globbing is safe
+PRELOADED_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+def load_uploaded_file(uploaded_file) -> pd.DataFrame:
+    """Read uploaded CSV safely, rewinding pointer and handling encoding."""
+    if uploaded_file is None:
+        return pd.DataFrame()
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+    try:
+        df = pd.read_csv(uploaded_file, encoding="utf-8")
+        # Convert to internal schema regardless of source CSV variant.
+        df = ingestion.standardize_granary_csv(df)
+        return df
+    except pd.errors.EmptyDataError:
+        st.error("Uploaded file appears empty or unreadable. Please verify the CSV.")
+        return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def load_trained_model(path: Optional[str | pathlib.Path] = None):
+    """Attempt to load a model from user-saved or preloaded directories."""
+    # Default fallback
+    if path is None:
+        path = MODELS_DIR / "rf_model.joblib"
+
+    path = pathlib.Path(path)
+
+    # If given just a filename, search in both dirs
+    if not path.is_absolute() and not path.exists():
+        user_path = MODELS_DIR / path
+        preload_path = PRELOADED_MODEL_DIR / path
+        if user_path.exists():
+            path = user_path
+        elif preload_path.exists():
+            path = preload_path
+
+    if path.exists():
+        return model_utils.load_model(path)
+
+    st.warning("Model not found – please train or select another.")
+    return None
+
+
+def plot_3d_grid(df: pd.DataFrame, *, key: str, color_by_delta: bool = False):
+    required_cols = {"grid_x", "grid_y", "grid_z", "temperature_grain"}
+    if not required_cols.issubset(df.columns):
+        st.info("No spatial temperature data present.")
+        return
+
+    # Build point hover/label text
+    texts = []
+    has_pred = "predicted_temp" in df.columns
+    for _, row in df.iterrows():
+        if color_by_delta and has_pred:
+            diff = row["predicted_temp"] - row["temperature_grain"]
+            texts.append(
+                f"Pred: {row['predicted_temp']:.1f}°C<br>Actual: {row['temperature_grain']:.1f}°C<br>Δ: {diff:+.1f}°C"
+            )
+        elif has_pred:
+            diff = row["predicted_temp"] - row["temperature_grain"]
+            texts.append(
+                f"Pred: {row['predicted_temp']:.1f}°C<br>Actual: {row['temperature_grain']:.1f}°C<br>Δ: {diff:+.1f}°C"
+            )
+        else:
+            texts.append(f"Actual: {row['temperature_grain']:.1f}°C")
+
+    if color_by_delta and has_pred:
+        color_vals = df["predicted_temp"] - df["temperature_grain"]
+        c_scale = "RdBu_r"
+        cbar_title = "Δ (°C)"
+    else:
+        color_vals = df["predicted_temp"] if has_pred else df["temperature_grain"]
+        c_scale = "RdBu_r"  # red = hot, blue = cold
+        cbar_title = "Temp (°C)" if not color_by_delta else "Pred (°C)"
+
+    fig = go.Figure(data=go.Scatter3d(
+        x=df["grid_x"],
+        y=df["grid_z"],
+        z=df["grid_y"],
+        mode="markers",
+        marker=dict(
+            size=6,
+            color=color_vals,
+            colorscale=c_scale,
+            colorbar=dict(title=cbar_title),
+        ),
+        text=texts,
+        hovertemplate="%{text}<extra></extra>",
+    ))
+    # Ensure integer ticks on axes
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(dtick=1, title="grid_x"),
+            yaxis=dict(dtick=1, title="grid_z"),
+            zaxis=dict(dtick=1, title="grid_y", autorange="reversed"),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        height=600,
+        margin=dict(l=0, r=0, b=0, t=0),
+    )
+    st.plotly_chart(fig, use_container_width=True, key=key)
+
+
+def plot_time_series(df: pd.DataFrame, *, key: str):
+    if "predicted_temp" not in df.columns or "detection_time" not in df.columns:
+        return
+    tmp = df.copy()
+    # Use floor("D") to keep datetime64 dtype; avoids Plotly treating axis as categorical
+    tmp["date"] = pd.to_datetime(tmp["detection_time"]).dt.floor("D")
+
+    fig = go.Figure()
+
+    # -------- Actual line --------
+    grp_actual = tmp.groupby("date").agg(actual=(TARGET_TEMP_COL, "mean")).reset_index()
+    fig.add_trace(
+        go.Scatter(
+            x=grp_actual["date"],
+            y=grp_actual["actual"],
+            mode="lines+markers",
+            name="Actual Avg",
+            line=dict(color="#1f77b4"),
+        )
+    )
+
+    # ------- Predicted line (continuous across eval & filled) -------
+    if "predicted_temp" in tmp.columns:
+        grp_pred = (
+            tmp.groupby("date").agg(predicted=("predicted_temp", "mean")).reset_index().sort_values("date")
+        )
+
+        # Determine cutoff between evaluation (has actual data) and future-only predictions
+        actual_mask = tmp[TARGET_TEMP_COL].notna()
+        last_actual_date = tmp.loc[actual_mask, "date"].max()
+
+        if pd.isna(last_actual_date):
+            pred_eval = pd.DataFrame()
+            pred_future = grp_pred
+        else:
+            pred_eval = grp_pred[grp_pred["date"] <= last_actual_date]
+            pred_future = grp_pred[grp_pred["date"] > last_actual_date]
+
+        if not pred_eval.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_eval["date"],
+                    y=pred_eval["predicted"],
+                    mode="lines+markers",
+                    name="Predicted (eval)",
+                    line=dict(color="#ff7f0e"),
+                    connectgaps=True,
+                )
+            )
+
+        if not pred_future.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_future["date"],
+                    y=pred_future["predicted"],
+                    mode="lines+markers",
+                    name="Predicted (future)",
+                    line=dict(color="#9467bd"),
+                    connectgaps=True,
+                )
+            )
+
+    fig.update_layout(
+        title="Average Grain Temperature Over Time",
+        xaxis_title="Date",
+        yaxis_title="Temperature (°C)",
+        xaxis=dict(rangeslider=dict(visible=True)),
+    )
+    st.plotly_chart(fig, use_container_width=True, key=key)
+
+
+def list_available_models() -> list[str]:
+    """Return unique model filenames from user-saved and preloaded dirs."""
+    names = {p.name for p in MODELS_DIR.glob("*.joblib")}
+    names.update({p.name for p in PRELOADED_MODEL_DIR.glob("*.joblib")})
+    return sorted(names)
+
+
+def split_train_eval(df: pd.DataFrame, horizon: int = 5):
+    """Split by unique date; last 'horizon' dates form evaluation set."""
+    df = df.copy()
+    df["_date"] = pd.to_datetime(df["detection_time"]).dt.date
+    unique_dates = sorted(df["_date"].unique())
+    if len(unique_dates) <= horizon + 1:
+        return df, pd.DataFrame()  # not enough data
+    cutoff_dates = unique_dates[-horizon:]
+    df_eval = df[df["_date"].isin(cutoff_dates)].copy()
+    df_train = df[~df["_date"].isin(cutoff_dates)].copy()
+    # map forecast_day index 1..horizon
+    date_to_idx = {date: idx for idx, date in enumerate(cutoff_dates, start=1)}
+    df_eval["forecast_day"] = df_eval["_date"].map(date_to_idx)
+    df_train.drop(columns=["_date"], inplace=True)
+    df_eval.drop(columns=["_date"], inplace=True)
+    return df_train, df_eval
+
+
+# -------------------------------------------------------------------
+# NEW – fraction‐based chronological split (May-2025)
+# -------------------------------------------------------------------
+
+
+def split_train_eval_frac(df: pd.DataFrame, test_frac: float = 0.2):
+    """Chronologically split *df* by unique date where the **last** fraction
+    (``test_frac``) of dates becomes the evaluation set.
+
+    Returns (df_train, df_eval) similar to ``split_train_eval`` but sized by
+    proportion instead of fixed horizon.
+    """
+    df = df.copy()
+    df["_date"] = pd.to_datetime(df["detection_time"]).dt.date
+    unique_dates = sorted(df["_date"].unique())
+    if not unique_dates:
+        return df, pd.DataFrame()
+
+    n_test_days = max(1, int(len(unique_dates) * test_frac))
+    cutoff_dates = unique_dates[-n_test_days:]
+
+    df_eval = df[df["_date"].isin(cutoff_dates)].copy()
+    df_train = df[~df["_date"].isin(cutoff_dates)].copy()
+
+    # map forecast_day index 1..n_test_days
+    date_to_idx = {date: idx for idx, date in enumerate(cutoff_dates, start=1)}
+    df_eval["forecast_day"] = df_eval["_date"].map(date_to_idx)
+
+    df_train.drop(columns=["_date"], inplace=True)
+    df_eval.drop(columns=["_date"], inplace=True)
+    return df_train, df_eval
+
+
+def forecast_summary(df_eval: pd.DataFrame) -> pd.DataFrame:
+    if "forecast_day" not in df_eval.columns:
+        return pd.DataFrame()
+
+    grp = (
+        df_eval.groupby("forecast_day")
+        .agg(
+            actual_mean=(TARGET_TEMP_COL, "mean"),
+            pred_mean=("predicted_temp", "mean"),
+        )
+        .reset_index()
+    )
+
+    # Percent absolute error (only where actual_mean is finite & non-zero)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        grp["pct_error"] = (grp["pred_mean"] - grp["actual_mean"]).abs() / grp["actual_mean"].replace(0, np.nan) * 100
+
+    # Confidence via R² per day (skip NaNs)
+    conf_vals: list[float] = []
+    for day in grp["forecast_day"]:
+        subset = df_eval[df_eval["forecast_day"] == day][[TARGET_TEMP_COL, "predicted_temp"]].dropna()
+        if len(subset) > 1:
+            r2 = r2_score(subset[TARGET_TEMP_COL], subset["predicted_temp"])
+            conf_vals.append(max(0, min(100, r2 * 100)))
+        else:
+            conf_vals.append(np.nan)
+    grp["confidence_%"] = conf_vals
+
+    return grp
+
+
+def compute_overall_metrics(df_eval: pd.DataFrame) -> tuple[float, float]:
+    """Return (confidence %, accuracy %) or (nan, nan) if not computable.
+    This helper now drops rows containing NaNs before computing metrics to avoid
+    ValueError from scikit-learn when all/any NaNs are present.
+    """
+    required = {TARGET_TEMP_COL, "predicted_temp"}
+    if not required.issubset(df_eval.columns) or df_eval.empty:
+        return float("nan"), float("nan")
+
+    valid = df_eval[list(required)].dropna()
+    if valid.empty:
+        return float("nan"), float("nan")
+
+    r2 = r2_score(valid[TARGET_TEMP_COL], valid["predicted_temp"])
+    conf = max(0, min(100, r2 * 100))
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct_err = (valid[TARGET_TEMP_COL] - valid["predicted_temp"]).abs() / valid[TARGET_TEMP_COL].replace(0, np.nan)
+    avg_pct_err = pct_err.mean(skipna=True) * 100 if not pct_err.empty else float("nan")
+    acc = max(0, 100 - avg_pct_err)
+    return conf, acc
+
+
+# --------------------------------------------------
+# Helper to build future rows for forecasting
+def make_future(df: pd.DataFrame, horizon_days: int) -> pd.DataFrame:
+    """Generate a future dataframe for the next ``horizon_days`` days.
+
+    For each unique spatial location (grid_x/y/z) present in *df*, this function
+    creates ``horizon_days`` duplicated rows with the *detection_time* advanced
+    by 1..horizon_days. It also appends a *forecast_day* column (1-indexed).
+
+    The resulting frame is passed through the same feature generators so it can
+    be fed directly into the model for prediction.
+    """
+    if df.empty or "detection_time" not in df.columns:
+        return pd.DataFrame()
+
+    df = df.copy()
+    df["detection_time"] = pd.to_datetime(df["detection_time"])
+    latest_ts = df["detection_time"].max()
+
+    # Keep spatial coords plus any constant categorical IDs (grain_type / warehouse_type)
+    keep_cols = [c for c in df.columns if c in {"grid_x", "grid_y", "grid_z", "granary_id", "heap_id"}]
+    sensors = df[keep_cols].drop_duplicates().reset_index(drop=True)
+
+    # Add constant metadata if available (assuming single value across file)
+    for const_col in ["grain_type", "warehouse_type"]:
+        if const_col in df.columns:
+            sensors[const_col] = df[const_col].dropna().iloc[0]
+
+    # Prepare base detection_cycle if present
+    max_cycle = df["detection_cycle"].max() if "detection_cycle" in df.columns else None
+
+    frames: List[pd.DataFrame] = []
+    for d in range(1, horizon_days + 1):
+        tmp = sensors.copy()
+        tmp["detection_time"] = latest_ts + timedelta(days=d)
+        tmp["forecast_day"] = d
+        if max_cycle is not None:
+            tmp["detection_cycle"] = max_cycle + d
+        frames.append(tmp)
+
+    future_df = pd.concat(frames, ignore_index=True)
+    # Feature engineering to match training pipeline
+    future_df = features.create_time_features(future_df)
+    future_df = features.create_spatial_features(future_df)
+    future_df = features.add_sensor_lag(future_df)
+    # Ensure both legacy and new target columns exist so downstream feature
+    # selection works regardless of current configuration.
+    if "temperature_grain" not in future_df.columns:
+        future_df["temperature_grain"] = np.nan
+    if TARGET_TEMP_COL not in future_df.columns:
+        future_df[TARGET_TEMP_COL] = np.nan
+    return future_df
+# --------------------------------------------------
+
+
+def main():
+    st.session_state.setdefault("evaluations", {})
+    st.session_state.setdefault("forecasts", {})  # NEW: container for forecast results
+
+    # Debug toggle – placed at very top so early messages are captured
+    st.sidebar.checkbox("Verbose debug mode", key="debug_mode", help="Show detailed internal processing messages", value=True)
+
+    with st.sidebar.expander("📂 Data", expanded=("uploaded_file" not in st.session_state)):
+        uploaded_file = st.file_uploader("Upload your own CSV", type=["csv"], key="uploader")
+
+        # ------------------------------------------------------------------
+        # Offer bundled sample datasets so users can start instantly
+        if PRELOADED_DATA_DIR.exists():
+            sample_files = sorted(PRELOADED_DATA_DIR.glob("*.csv"))
+            if sample_files:
+                st.caption("Or pick a bundled sample dataset:")
+                sample_names = ["-- Select sample --"] + [p.name for p in sample_files]
+                sample_choice = st.selectbox(
+                    "Sample dataset",  # non-empty label for accessibility
+                    options=sample_names,
+                    key="sample_selector",
+                    label_visibility="collapsed",  # hide visually but keep for screen readers
+                )
+                if sample_choice and sample_choice != "-- Select sample --":
+                    uploaded_file = PRELOADED_DATA_DIR / sample_choice  # path object -> pd.read_csv works
+                    st.info(f"Sample dataset '{sample_choice}' selected.")
+
+    if uploaded_file:
+        df = load_uploaded_file(uploaded_file)
+        with st.expander("Raw Data", expanded=False):
+            st.dataframe(df, use_container_width=True)
+
+        # ------------------------------------------------------------------
+        # Auto-organise if the upload mixes multiple silos
+        # ------------------------------------------------------------------
+        if "granary_id" in df.columns and "heap_id" in df.columns:
+            uniq_silos = df[["granary_id", "heap_id"]].drop_duplicates().shape[0]
+            if uniq_silos > 1 and not st.session_state.get("auto_organised", False) and not _looks_processed(uploaded_file):
+                with st.spinner("Detected mixed dataset – organising into per-silo files…"):
+                    out_root = "data/raw/by_silo"
+                    try:
+                        # Persist the upload to a temporary file so organizer can read it
+                        if hasattr(uploaded_file, "read") and not isinstance(uploaded_file, (str, pathlib.Path)):
+                            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+                            tmp.write(uploaded_file.getvalue())
+                            tmp.flush()
+                            input_path = tmp.name
+                        else:
+                            input_path = uploaded_file if isinstance(uploaded_file, (str, pathlib.Path)) else uploaded_file.name
+                        written = organize_mixed_csv(input_path, out_dir=out_root)
+                        # Read all newly created slices back into a single frame for immediate use
+                        import glob, os
+                        slice_files = glob.glob(os.path.join(out_root, "**", "*.csv"), recursive=True)
+                        df_slices = [pd.read_csv(fp, encoding="utf-8") for fp in slice_files]
+                        if df_slices:
+                            concat_df = pd.concat(df_slices, ignore_index=True, sort=False)
+                            st.session_state["organized_df"] = concat_df
+
+                            # Persist a preprocessed version to data/processed
+                            from pathlib import Path
+                            processed_dir = Path("data/processed")
+                            processed_dir.mkdir(parents=True, exist_ok=True)
+                            stem = Path(input_path).stem.replace(" ", "_")
+                            out_csv = processed_dir / f"{stem}_processed.csv"
+                            _preprocess_df(concat_df).to_csv(out_csv, index=False, encoding="utf-8")
+                            st.info(f"Preprocessed CSV written to '{out_csv}'. You can reuse this file directly.")
+                        st.success(f"Organised into {written} slice files under '{out_root}'.")
+                        st.session_state["auto_organised"] = True
+                        # Invalidate previous processed cache
+                        st.session_state.pop("processed_df", None)
+                    except Exception as exc:
+                        st.warning(f"Could not organise mixed CSV: {exc}")
+
+        # Full preprocessing once
+        _d("Running full preprocessing on uploaded dataframe (cached)…")
+        df = _get_preprocessed_df(uploaded_file)
+        _d(f"Preprocessed dataframe shape: {df.shape}")
+
+        # Display sorted table directly below Raw Data
+        df_sorted_display = df
+        with st.expander("Sorted Data", expanded=False):
+            _st_dataframe_safe(df_sorted_display, key="sorted")
+
+        # ------------------------------
+        # Global Warehouse → Silo filter
+        # ------------------------------
+
+        st.markdown("### 🏢 Location Filter")
+        with st.container():
+            # Detect possible column names coming from different CSV formats
+            wh_col_candidates = [c for c in ["granary_id", "storepointName"] if c in df.columns]
+            silo_col_candidates = [c for c in ["heap_id", "storeName"] if c in df.columns]
+
+            wh_col = wh_col_candidates[0] if wh_col_candidates else None
+            silo_col = silo_col_candidates[0] if silo_col_candidates else None
+
+            # 1️⃣ Warehouse selector – always shown if the column exists
+            if wh_col:
+                warehouses = sorted(df[wh_col].dropna().unique())
+                warehouses_opt = ["All"] + warehouses
+                sel_wh_global = st.selectbox(
+                    "Warehouse",
+                    options=warehouses_opt,
+                    key="global_wh",
+                )
+            else:
+                sel_wh_global = "All"
+
+            # 2️⃣ Silo selector – rendered only after a specific warehouse is chosen
+            if wh_col and sel_wh_global != "All" and silo_col:
+                silos = sorted(df[df[wh_col] == sel_wh_global][silo_col].dropna().unique())
+                silos_opt = ["All"] + silos
+                sel_silo_global = st.selectbox(
+                    "Silo",
+                    options=silos_opt,
+                    key="global_silo",
+                )
+            else:
+                sel_silo_global = "All"
+
+            # Persist selection in session state for downstream use
+            st.session_state["global_filters"] = {
+                "wh": sel_wh_global,
+                "silo": sel_silo_global,
+            }
+
+        with st.sidebar.expander("🏗️ Train / Retrain Model", expanded=False):
+            model_choice = st.selectbox(
+                "Algorithm",
+                ["RandomForest", "HistGradientBoosting", "LightGBM"],
+                index=0,
+            )
+            n_trees = st.slider("Iterations / Trees", 100, 1000, 300, step=100)
+            future_safe = st.checkbox("Future-safe (exclude env vars)", value=True)
+
+            # ---------------- Training split mode -----------------
+            split_mode = st.radio(
+                "Training split mode",
+                ["Percentage", "Last 30 days"],
+                index=0,
+                horizontal=True,
+                help="Choose how to divide data into training vs validation sets.",
+            )
+
+            if split_mode == "Percentage":
+                train_pct = st.slider(
+                    "Train split (%)",
+                    50,
+                    100,
+                    80,
+                    step=5,
+                    help="Percentage of data used for training; set to 100% to train on the whole dataset without a validation split.",
+                )
+                use_last_30 = False
+            else:
+                # Fixed 30-day window selected – ignore percentage slider.
+                train_pct = None
+                use_last_30 = True
+
+            train_pressed = st.button("Train on uploaded CSV")
+
+        if train_pressed and uploaded_file:
+            with st.spinner("Training model – please wait..."):
+                # -------- Data preparation --------
+                df = _get_preprocessed_df(uploaded_file)
+
+                if "temperature_grain_h1d" not in df.columns:
+                    df = features.add_multi_horizon_targets(df, horizons=(1, 2, 3))
+
+                if future_safe:
+                    df = df.drop(columns=ENV_COLUMNS + FUTURE_SAFE_EXTRA, errors="ignore")
+
+                # Ensure multi-horizon target columns present (fast-path CSVs may lack them)
+                if "temperature_grain_h1d" not in df.columns:
+                    df = features.add_multi_horizon_targets(df, horizons=(1, 2, 3))
+
+                # Consistent sorting & grouping
+                df = comprehensive_sort(df)
+                df = assign_group_id(df)
+
+                # Feature matrix / target (MULTI-OUTPUT)
+                X_all, y_all = features.select_feature_target_multi(
+                    df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                )  # NEW
+
+                # -------- Group-aware hold-out with user-defined split --------
+                _d("Preparing train/test split…")
+
+                if use_last_30:
+                    df_train_tmp, df_eval_tmp = split_train_last_n_days(df, n_days=30)
+                    X_tr, y_tr = features.select_feature_target_multi(
+                        df_train_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                    )
+                    X_te, y_te = features.select_feature_target_multi(
+                        df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                    )
+                    perform_validation = not X_te.empty
+                elif train_pct == 100:
+                    X_tr, y_tr = X_all, y_all
+                    X_te = y_te = pd.DataFrame()
+                    perform_validation = False
+                else:
+                    test_frac_chrono = max(0.05, 1 - train_pct / 100)
+                    df_train_tmp, df_eval_tmp = split_train_eval_frac(df, test_frac=test_frac_chrono)
+                    X_tr, y_tr = features.select_feature_target_multi(
+                        df_train_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                    )
+                    X_te, y_te = features.select_feature_target_multi(
+                        df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                    )
+                    perform_validation = not X_te.empty
+
+                # -------- Model selection & training --------
+                if model_choice == "RandomForest":
+                    base_mdl = RandomForestRegressor(n_estimators=n_trees, n_jobs=-1, random_state=42)
+                    suffix = "rf"
+                elif model_choice == "HistGradientBoosting":
+                    base_mdl = HistGradientBoostingRegressor(max_depth=None, learning_rate=0.1, max_iter=n_trees, random_state=42)
+                    suffix = "hgb"
+                else:  # LightGBM with tuned defaults
+                    base_mdl = LGBMRegressor(
+                        n_estimators=int(n_trees),  # still respect UI slider
+                        learning_rate=0.03347500352712116,
+                        max_depth=7,
+                        num_leaves=24,
+                        subsample=0.8832753633141975,
+                        colsample_bytree=0.6292206613991069,
+                        min_child_samples=44,
+                        random_state=42,
+                        n_jobs=-1,
+                    )
+                    suffix = "lgbm"
+
+                mdl = MultiOutputRegressor(base_mdl)  # NEW wrapper
+                _d(f"Instantiated MultiOutput {model_choice} with n_trees={n_trees}")
+                mdl.fit(X_tr, y_tr)
+                _d("Model fit on training data")
+
+                # Validation on unseen groups (if possible)
+                if perform_validation and not X_te.empty:
+                    preds = mdl.predict(X_te)
+                    _d("Predictions generated on validation split")
+                    mae_val = mean_absolute_error(y_te, preds)
+                    rmse_val = mean_squared_error(y_te, preds) ** 0.5
+                    _d(f"Validation metrics → MAE: {mae_val:.3f}, RMSE: {rmse_val:.3f}")
+                else:
+                    mae_val = rmse_val = float("nan")
+
+                # -------- Persist model --------
+                csv_stem = pathlib.Path(uploaded_file.name).stem.replace(" ", "_").lower()
+                model_name = f"{csv_stem}_{'fs_' if future_safe else ''}{suffix}_{n_trees}.joblib"
+                model_utils.save_model(mdl, name=model_name)
+
+            if np.isnan(mae_val):
+                st.sidebar.success(f"{model_choice} trained (validation split contained no ground-truth targets).")
+            else:
+                st.sidebar.success(f"{model_choice} trained! MAE: {mae_val:.2f}, RMSE: {rmse_val:.2f}")
+            # Persist split settings for later evaluation
+            st.session_state["last_train_split_mode"] = "last30" if use_last_30 else "percentage"
+            if not use_last_30:
+                st.session_state["last_train_pct"] = 100 if train_pct == 100 else train_pct
+
+        # Existing model evaluation
+        with st.sidebar.expander("🔍 Evaluate Model", expanded=False):
+            model_files = list_available_models()
+            if not model_files:
+                st.write("No saved models yet.")
+                eval_pressed = False
+                selected_model = None
+                eval_fc_pressed = False
+                all_models_chk = False
+            else:
+                selected_model = st.selectbox("Model file", model_files)
+                # Checkbox to act on all models
+                all_models_chk = st.checkbox("Apply to all models", key="chk_eval_all")
+
+                col_eval, col_evalfc = st.columns([1,1])
+                with col_eval:
+                    eval_pressed = st.button("Evaluate", key="btn_eval_single", use_container_width=True)
+                with col_evalfc:
+                    eval_fc_pressed = st.button("Eval & Forecast", key="btn_eval_fc", use_container_width=True)
+
+        if (eval_pressed or eval_fc_pressed):
+            if uploaded_file is None:
+                st.warning("Please upload a CSV first to evaluate.")
+            else:
+                # Determine which models to evaluate
+                target_models = list_available_models() if all_models_chk else [selected_model]
+                with st.spinner("Evaluating model(s) – please wait..."):
+                    df = _get_preprocessed_df(uploaded_file)
+                    # Use same train/test split fraction recorded during training (default 20%)
+                    test_frac = max(0.01, 1 - st.session_state.get("last_train_pct", 80)/100)
+
+                    # ---------- Split matching the training configuration ----------
+                    split_mode_prev = st.session_state.get("last_train_split_mode", "percentage")
+
+                    if split_mode_prev == "last30":
+                        df_train_base, df_eval_base = split_train_last_n_days(df, n_days=30)
+                    else:
+                        df_train_base, df_eval_base = split_train_eval_frac(df, test_frac=test_frac)
+
+                    _d(f"Evaluation split – train rows: {len(df_train_base)}, test rows: {len(df_eval_base)}")
+                    use_gap_fill = False  # skip calendar gap generation – evaluate only real rows
+
+                    X_train_base, _ = features.select_feature_target_multi(
+                        df_train_base, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+                    )  # NEW
+
+                    for mdl_name in target_models:
+                        df_train = df_train_base.copy()
+                        df_eval = df_eval_base.copy()
+
+                        mdl = load_trained_model(mdl_name)
+                        if not mdl:
+                            st.error(f"Could not load {mdl_name}")
+                            continue
+
+                        # If model is future-safe, drop env/extra cols from evaluation/training sets to mimic determinate-only input
+                        if is_future_safe_model(mdl_name):
+                            df_train = df_train.drop(columns=ENV_COLUMNS + FUTURE_SAFE_EXTRA, errors="ignore")
+                            df_eval = df_eval.drop(columns=ENV_COLUMNS + FUTURE_SAFE_EXTRA, errors="ignore")
+
+                        # ---------------- Ensure category codes align with training ----------------
+                        cat_cols_train_loop = df_train.select_dtypes(include=["object", "category"]).columns
+                        categories_map = {c: pd.Categorical(df_train[c]).categories.tolist() for c in cat_cols_train_loop}
+
+                        X_eval, _ = features.select_feature_target_multi(
+                            df_eval, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+                        )  # NEW
+                        # Align features to the model's expected input
+                        feature_cols_mdl = get_feature_cols(mdl, X_eval)
+                        X_eval_aligned = X_eval.reindex(columns=feature_cols_mdl, fill_value=0)
+                        # NEW – generate aligned training design matrix for debugging visualisation
+                        X_train, _ = features.select_feature_target_multi(
+                            df_train, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+                        )  # NEW
+                        X_train_aligned = X_train.reindex(columns=feature_cols_mdl, fill_value=0)
+                        preds = model_utils.predict(mdl, X_eval_aligned)
+                        _d(f"Model {mdl_name}: eval predictions shape {preds.shape}")
+
+                        # -------- Attach predictions to df_eval --------
+                        if getattr(preds, "ndim", 1) == 2 and preds.shape[1] >= 3:
+                            # Multi-output (horizons 1-3)
+                            df_eval.loc[X_eval_aligned.index, "pred_h1d"] = preds[:, 0]
+                            df_eval.loc[X_eval_aligned.index, "pred_h2d"] = preds[:, 1]
+                            df_eval.loc[X_eval_aligned.index, "pred_h3d"] = preds[:, 2]
+                            # For backward-compat plots keep original col name (uses h1)
+                            df_eval.loc[X_eval_aligned.index, "predicted_temp"] = preds[:, 0]
+                        else:
+                            # Single-output – treat as horizon 1 only
+                            df_eval.loc[X_eval_aligned.index, "predicted_temp"] = preds
+                            df_eval.loc[X_eval_aligned.index, "pred_h1d"] = preds
+
+                        df_eval["is_forecast"] = False
+
+                        # Combine training (actual only) and evaluation rows for full context time-series
+                        df_train_plot = df_train.copy()
+                        df_train_plot["is_forecast"] = False
+                        df_predplot_all = pd.concat([df_eval, df_train_plot], ignore_index=True)
+
+                        # metrics
+                        df_eval_actual = df_eval[df_eval[TARGET_TEMP_COL].notna()].copy()
+                        # ----- Metrics per horizon -----
+                        def _metric(col):
+                            mask = df_eval_actual[[TARGET_TEMP_COL, col]].notna().all(axis=1)
+                            if not mask.any():
+                                return float("nan"), float("nan"), float("nan")
+                            err = df_eval_actual.loc[mask, TARGET_TEMP_COL] - df_eval_actual.loc[mask, col]
+                            mae_c = err.abs().mean()
+                            rmse_c = (err ** 2).mean() ** 0.5
+                            mape_c = (err.abs() / df_eval_actual.loc[mask, TARGET_TEMP_COL]).mean() * 100
+                            return mae_c, rmse_c, mape_c
+
+                        mae_h1, rmse_h1, mape_h1 = _metric("pred_h1d")
+                        mae_h2, rmse_h2, mape_h2 = _metric("pred_h2d") if "pred_h2d" in df_eval_actual.columns else (float("nan"),)*3
+                        mae_h3, rmse_h3, mape_h3 = _metric("pred_h3d") if "pred_h3d" in df_eval_actual.columns else (float("nan"),)*3
+
+                        # Retain legacy overall MAE/RMSE as horizon 1
+                        mae = mae_h1
+                        rmse = rmse_h1
+                        mape = mape_h1
+                        conf, acc = compute_overall_metrics(df_eval_actual)
+
+                        # -------------- Feature Importance ----------------
+                        def _compute_importance(model, feature_cols):
+                            if isinstance(model, MultiOutputRegressor):
+                                # average over outputs
+                                imps = np.mean([
+                                    getattr(est, "feature_importances_", np.zeros(len(feature_cols)))
+                                    for est in model.estimators_
+                                ], axis=0)
+                            elif hasattr(model, "feature_importances_"):
+                                imps = getattr(model, "feature_importances_")
+                            elif hasattr(model, "coef_"):
+                                imps = np.abs(getattr(model, "coef_"))
+                            else:
+                                imps = np.zeros(len(feature_cols))
+                            return imps
+
+                        feat_importances = _compute_importance(mdl, feature_cols_mdl)
+                        fi_df = (
+                            pd.DataFrame({"feature": feature_cols_mdl, "importance": feat_importances})
+                            .sort_values("importance", ascending=False)
+                            .reset_index(drop=True)
+                        )
+
+                        st.session_state["evaluations"][mdl_name] = {
+                            "df_eval": df_eval,
+                            "df_predplot_all": df_predplot_all,
+                            "confidence": conf,
+                            "accuracy": acc,
+                            "rmse": rmse,
+                            "mae": mae,
+                            "mape": mape,
+                            "mae_h1": mae_h1,
+                            "mae_h2": mae_h2,
+                            "mae_h3": mae_h3,
+                            "rmse_h1": rmse_h1,
+                            "rmse_h2": rmse_h2,
+                            "rmse_h3": rmse_h3,
+                            "feature_cols": feature_cols_mdl,
+                            "feature_importance": fi_df,
+                            "categories_map": categories_map,
+                            "horizon": len(df_eval["forecast_day"].unique()) if "forecast_day" in df_eval.columns else 0,
+                            "df_base": df,
+                            "model_name": mdl_name,
+                            "future_safe": is_future_safe_model(mdl_name),
+                            # NEW debug matrices
+                            "X_train": X_train_aligned,
+                            "X_eval": X_eval_aligned,
+                        }
+
+                    # last evaluated model as active
+                    if target_models:
+                        st.session_state["active_model"] = target_models[0]
+
+                    st.sidebar.success("Evaluation(s) completed.")
+
+                    # If user requested Eval & Forecast, automatically create forecast for selected model
+                    if eval_fc_pressed:
+                        st.sidebar.write("Generating forecast…")
+                        models_to_fc = target_models  # already respects all_models_chk
+                        for mdl in models_to_fc:
+                            generate_and_store_forecast(mdl, horizon=3)
+                        st.sidebar.success("Forecast(s) created.")
+
+    # Render evaluation view (chosen via dropdown instead of tabs)
+    if st.session_state["evaluations"]:
+        eval_keys = list(st.session_state["evaluations"].keys())
+        active_model = st.session_state.get("active_model", eval_keys[0])
+
+        chosen_model = st.selectbox(
+            "Select evaluated model",
+            options=eval_keys,
+            index=eval_keys.index(active_model) if active_model in eval_keys else 0,
+        )
+        # Persist selection so next rerun keeps the same model
+        st.session_state["active_model"] = chosen_model
+
+        # Inner tabs for the chosen model
+        inner_tabs = st.tabs(["Evaluation", "Forecast"])
+
+        # --- Evaluation Tab ---
+        with inner_tabs[0]:
+            render_evaluation(chosen_model)
+
+        # --- Forecast Tab ---
+        with inner_tabs[1]:
+            if chosen_model in st.session_state.get("forecasts", {}):
+                render_forecast(chosen_model)
+            else:
+                st.info("No forecast generated yet for this model.")
+                if st.button("Generate Forecast", key=f"btn_gen_fc_main_{chosen_model}"):
+                    with st.spinner("Generating forecast…"):
+                        if generate_and_store_forecast(chosen_model, horizon=3):
+                            st.success("Forecast generated – switch tabs to view.")
+
+    # --------------------------------------------------
+    # Leaderboard (full-width collapsible panel) -----------------------------------
+    evals = st.session_state["evaluations"]
+
+    st.markdown("---")
+    with st.expander("🏆 Model Leaderboard", expanded=False):
+        if not evals:
+            st.write("No evaluations yet.")
+        else:
+            data = []
+            for name, d in evals.items():
+                data.append(
+                    {
+                        "model": name,
+                        "confidence": d.get("confidence", float("nan")),
+                        "accuracy": d.get("accuracy", float("nan")),
+                        "rmse": d.get("rmse", float("nan")),
+                        "mae": d.get("mae", float("nan")),
+                    }
+                )
+            df_leader = (
+                pd.DataFrame(data)
+                .sort_values(["confidence", "accuracy"], ascending=False)
+                .reset_index(drop=True)
+            )
+            df_leader.insert(0, "rank", df_leader.index + 1)
+            st.dataframe(df_leader, use_container_width=True)
+
+    # Optionally still expose full log
+    if st.session_state.get("debug_mode"):
+        dbg_log = st.session_state.get("debug_msgs", [])
+        if dbg_log:
+            with st.expander("🛠️ Debug Log (full)", expanded=False):
+                st.code("\n".join(dbg_log), language="text")
+
+
+
+# ================== NEW HELPER RENDER FUNCTIONS ==================
+
+def render_evaluation(model_name: str):
+    """Render the evaluation view for a given *model_name* inside its tab."""
+    res = st.session_state["evaluations"][model_name]
+    # Categories captured during initial evaluation (may be empty)
+    categories_map = res.get("categories_map", {})
+    df_eval = res["df_eval"]
+    df_predplot_all = res["df_predplot_all"]
+
+    # Ensure 'forecast_day' exists for downstream UI widgets
+    if "forecast_day" not in df_eval.columns and "detection_time" in df_eval.columns:
+        date_series = pd.to_datetime(df_eval["detection_time"]).dt.floor("D")
+        unique_dates_sorted = sorted(date_series.unique())
+        date2idx = {d: idx for idx, d in enumerate(unique_dates_sorted, start=1)}
+        df_eval["forecast_day"] = date_series.map(date2idx)
+        # Apply same mapping to the combined prediction frame if present
+        if "detection_time" in df_predplot_all.columns:
+            df_predplot_all["forecast_day"] = pd.to_datetime(df_predplot_all["detection_time"]).dt.floor("D").map(date2idx)
+
+    # ---------------- Warehouse → Silo cascading filters -----------------
+    wh_col_candidates = [c for c in ["granary_id", "storepointName"] if c in df_eval.columns]
+    silo_col_candidates = [c for c in ["heap_id", "storeName"] if c in df_eval.columns]
+
+    wh_col = wh_col_candidates[0] if wh_col_candidates else None
+    silo_col = silo_col_candidates[0] if silo_col_candidates else None
+
+    # Apply global location filter (chosen in the sidebar)
+    global_filters = st.session_state.get("global_filters", {})
+    sel_wh = global_filters.get("wh", "All")
+    sel_silo = global_filters.get("silo", "All")
+
+    if wh_col:
+        if sel_wh != "All":
+            df_eval = df_eval[df_eval[wh_col] == sel_wh]
+            df_predplot_all = df_predplot_all[df_predplot_all[wh_col] == sel_wh]
+
+        if silo_col and sel_silo != "All":
+            df_eval = df_eval[df_eval[silo_col] == sel_silo]
+            df_predplot_all = df_predplot_all[df_predplot_all[silo_col] == sel_silo]
+
+    # -------- Metrics (re-computed on filtered subset) ---------
+    conf_val, acc_val = compute_overall_metrics(df_eval)
+    if {TARGET_TEMP_COL, "predicted_temp"}.issubset(df_eval.columns) and not df_eval.empty:
+        mae_val = (df_eval[TARGET_TEMP_COL] - df_eval["predicted_temp"]).abs().mean()
+        rmse_val = ((df_eval[TARGET_TEMP_COL] - df_eval["predicted_temp"]) ** 2).mean() ** 0.5
+        mape_val = ((df_eval[TARGET_TEMP_COL] - df_eval["predicted_temp"]).abs() / df_eval[TARGET_TEMP_COL]).mean() * 100
+    else:
+        rmse_val = mae_val = mape_val = float("nan")
+
+    # Per-horizon metrics table
+    mae_h1 = res.get("mae_h1", float("nan"))
+    mae_h2 = res.get("mae_h2", float("nan"))
+    mae_h3 = res.get("mae_h3", float("nan"))
+    rmse_h1 = res.get("rmse_h1", float("nan"))
+    rmse_h2 = res.get("rmse_h2", float("nan"))
+    rmse_h3 = res.get("rmse_h3", float("nan"))
+
+    metric_cols = st.columns(6)
+    with metric_cols[0]:
+        st.metric("Conf (%)", "--" if pd.isna(conf_val) else f"{conf_val:.2f}")
+    with metric_cols[1]:
+        st.metric("Acc (%)", "--" if pd.isna(acc_val) else f"{acc_val:.2f}")
+    with metric_cols[2]:
+        st.metric("MAE h+1", "--" if pd.isna(mae_h1) else f"{mae_h1:.2f}")
+    with metric_cols[3]:
+        st.metric("MAE h+2", "--" if pd.isna(mae_h2) else f"{mae_h2:.2f}")
+    with metric_cols[4]:
+        st.metric("MAE h+3", "--" if pd.isna(mae_h3) else f"{mae_h3:.2f}")
+    with metric_cols[5]:
+        st.metric("RMSE h+1", "--" if pd.isna(rmse_h1) else f"{rmse_h1:.2f}")
+
+    st.markdown("---")
+
+    summary_tab, pred_tab, grid_tab, ts_tab, extremes_tab, debug_tab = st.tabs(["Summary", "Predictions", "3D Grid", "Time Series", "Extremes", "Debug"])
+
+    with summary_tab:
+        if "predicted_temp" in df_eval.columns:
+            st.subheader("Forecast Summary (per day)")
+            st.dataframe(
+                forecast_summary(df_eval),
+                use_container_width=True,
+                key=f"summary_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}",
+            )
+
+            def exceeds(row):
+                thresh = GRAIN_ALERT_THRESHOLDS.get(row.get("grain_type"), ALERT_TEMP_THRESHOLD)
+                return row["predicted_temp"] >= thresh
+
+            if df_eval.apply(exceeds, axis=1).any():
+                st.error("⚠️ High temperature forecast detected for at least one grain type – monitor closely!")
+            else:
+                st.success("All predicted temperatures within safe limits for their grain types")
+
+            # ---------------- Top Features ----------------
+            fi_df = res.get("feature_importance")
+            if fi_df is not None and not fi_df.empty:
+                st.markdown("### Top Predictive Features")
+                st.dataframe(fi_df.head(15), use_container_width=True, key=f"feat_imp_{model_name}")
+
+    with pred_tab:
+        _st_dataframe_safe(df_predplot_all, key=f"pred_df_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}")
+
+    with grid_tab:
+        # Build list of unique dates present in evaluation subset only
+        unique_dates = sorted(pd.to_datetime(df_eval["detection_time"]).dt.floor("D").unique())
+        date_choice = st.selectbox(
+            "Select date",
+            options=[d.strftime("%Y-%m-%d") for d in unique_dates],
+            key=f"day_{model_name}_grid_{len(unique_dates)}",
+        )
+        sel_date = pd.to_datetime(date_choice)
+        df_predplot = df_predplot_all[pd.to_datetime(df_predplot_all["detection_time"]).dt.floor("D") == sel_date]
+        plot_3d_grid(
+            df_predplot,
+            key=f"grid_{model_name}_{date_choice}",
+            color_by_delta=True,
+        )
+
+    with ts_tab:
+        # Merge past (training+eval) with future predictions so the trend is continuous
+        hist_df = res.get("df_predplot_all")
+        if hist_df is None:
+            hist_df = pd.DataFrame()
+        combined_df = pd.concat([hist_df, df_eval], ignore_index=True, sort=False)
+        plot_time_series(
+            combined_df,
+            key=f"time_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}",
+        )
+
+    # ------------------ EXTREMES TAB ------------------
+    with extremes_tab:
+        st.subheader("Daily Extremes (h+1)")
+
+        df_eval_actual = df_eval[df_eval[TARGET_TEMP_COL].notna()].copy()
+        if df_eval_actual.empty or "pred_h1d" not in df_eval_actual.columns and "predicted_temp" not in df_eval_actual.columns:
+            st.info("No horizon-1 predictions available to compute extremes.")
+        else:
+            # Use column alias – pred_h1d preferred but fall back to predicted_temp
+            pred_col = "pred_h1d" if "pred_h1d" in df_eval_actual.columns else "predicted_temp"
+            df_eval_actual["date"] = pd.to_datetime(df_eval_actual["detection_time"]).dt.date
+            df_eval_actual["error"] = df_eval_actual[pred_col] - df_eval_actual[TARGET_TEMP_COL]
+
+            rows = []
+            for d, grp in df_eval_actual.groupby("date"):
+                daily_avg_dev = grp["error"].abs().mean()
+                # Over-prediction (max positive error)
+                over_row = grp.loc[grp["error"].idxmax()]
+                # Under-prediction (most negative error)
+                under_row = grp.loc[grp["error"].idxmin()]
+
+                for typ, r in [("Over", over_row), ("Under", under_row)]:
+                    rows.append(
+                        {
+                            "date": d,
+                            "type": typ,
+                            "predicted": r[pred_col],
+                            "actual": r[TARGET_TEMP_COL],
+                            "error": r["error"],
+                            "avg_daily_abs_error": daily_avg_dev,
+                            "grid_x": r.get("grid_x"),
+                            "grid_y": r.get("grid_y"),
+                            "grid_z": r.get("grid_z"),
+                        }
+                    )
+
+            extremes_df = pd.DataFrame(rows)
+            # Sort by date then over/under
+            extremes_df.sort_values(["date", "type"], inplace=True)
+            _st_dataframe_safe(extremes_df, key=f"extremes_{model_name}_{len(rows)}")
+
+            # -------------- Time-series plots ----------------
+            if not extremes_df.empty:
+                # Ensure date as datetime for proper plotting
+                extremes_df["date"] = pd.to_datetime(extremes_df["date"])
+
+                # ---- 1. Average daily absolute error plot ----
+                daily_avg = (
+                    extremes_df[["date", "avg_daily_abs_error"]]
+                    .drop_duplicates(subset="date")
+                    .sort_values("date")
+                )
+                fig_avg = go.Figure(
+                    data=[
+                        go.Scatter(
+                            x=daily_avg["date"],
+                            y=daily_avg["avg_daily_abs_error"],
+                            mode="lines+markers",
+                            name="Avg |Error|",
+                        )
+                    ]
+                )
+                fig_avg.update_layout(
+                    title="Average Daily Absolute Error (h+1)",
+                    xaxis_title="Date",
+                    yaxis_title="Avg |Error| (°C)",
+                    xaxis=dict(tickformat="%Y-%m-%d"),
+                )
+                st.plotly_chart(fig_avg, use_container_width=True, key=f"avg_err_plot_{model_name}")
+
+                # Helper to plot over/under lines
+                def _plot_pred_vs_actual(sub_df: pd.DataFrame, title: str, key: str):
+                    sub_df = sub_df.sort_values("date")
+                    fig = go.Figure()
+                    fig.add_trace(
+                        go.Scatter(
+                            x=sub_df["date"],
+                            y=sub_df["actual"],
+                            mode="lines+markers",
+                            name="Actual",
+                        )
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=sub_df["date"],
+                            y=sub_df["predicted"],
+                            mode="lines+markers",
+                            name="Predicted",
+                        )
+                    )
+                    fig.update_layout(
+                        title=title,
+                        xaxis_title="Date",
+                        yaxis_title="Temperature (°C)",
+                        xaxis=dict(tickformat="%Y-%m-%d"),
+                    )
+                    st.plotly_chart(fig, use_container_width=True, key=key)
+
+                # ---- 2. Over-prediction line plot ----
+                over_df = extremes_df[extremes_df["type"] == "Over"]
+                if not over_df.empty:
+                    _plot_pred_vs_actual(over_df, "Over-Prediction (h+1)", f"over_plot_{model_name}")
+
+                # ---- 3. Under-prediction line plot ----
+                under_df = extremes_df[extremes_df["type"] == "Under"]
+                if not under_df.empty:
+                    _plot_pred_vs_actual(under_df, "Under-Prediction (h+1)", f"under_plot_{model_name}")
+
+    # ------------------ DEBUG TAB ------------------
+    with debug_tab:
+        st.subheader("⚙️ Feature Matrices (first 100 rows)")
+        x_train_dbg = res.get("X_train")
+        if x_train_dbg is not None:
+            st.write("Training – X_train")
+            _st_dataframe_safe(x_train_dbg, key=f"xtrain_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}")
+        x_eval_dbg = res.get("X_eval")
+        if x_eval_dbg is not None:
+            st.write("Evaluation – X_eval")
+            _st_dataframe_safe(x_eval_dbg, key=f"xeval_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}")
+        st.write("Model Feature Columns (order)")
+        st.code(", ".join(res.get("feature_cols", [])))
+
+
+def render_forecast(model_name: str):
+    """Render the forecast view (if available) for *model_name*."""
+    forecast_data = st.session_state.get("forecasts", {}).get(model_name)
+    if not forecast_data:
+        st.info("No forecast generated for this model yet.")
+        return
+
+    # -------- Initial dataframe & warehouse/silo filters --------
+    future_df = forecast_data["future_df"]
+
+    # Apply global location filter (chosen in the sidebar)
+    global_filters = st.session_state.get("global_filters", {})
+    sel_wh_fc = global_filters.get("wh", "All")
+    sel_silo_fc = global_filters.get("silo", "All")
+
+    wh_col_candidates = [c for c in ["granary_id", "storepointName"] if c in future_df.columns]
+    silo_col_candidates = [c for c in ["heap_id", "storeName"] if c in future_df.columns]
+
+    wh_col = wh_col_candidates[0] if wh_col_candidates else None
+    silo_col = silo_col_candidates[0] if silo_col_candidates else None
+
+    if wh_col:
+        if sel_wh_fc != "All":
+            future_df = future_df[future_df[wh_col] == sel_wh_fc]
+
+        if silo_col and sel_silo_fc != "All":
+            future_df = future_df[future_df[silo_col] == sel_silo_fc]
+
+    # Update forecast_data copy with filtered df for downstream plots
+    df_plot_base = future_df.copy()
+
+    # -------- Metrics forwarded from last evaluation (confidence etc.) ---------
+    res_eval = st.session_state.get("evaluations", {}).get(model_name, {})
+    conf_val = res_eval.get("confidence", float("nan"))
+    acc_val = res_eval.get("accuracy", float("nan"))
+    rmse_val = res_eval.get("rmse", float("nan"))
+    mae_val = res_eval.get("mae", float("nan"))
+    mape_val = res_eval.get("mape", float("nan"))
+
+    metric_cols = st.columns(5)
+    with metric_cols[0]:
+        st.metric("Confidence (%)", "--" if pd.isna(conf_val) else f"{conf_val:.3f}")
+    with metric_cols[1]:
+        st.metric("Accuracy (%)", "--" if pd.isna(acc_val) else f"{acc_val:.3f}")
+    with metric_cols[2]:
+        st.metric("RMSE", "--" if pd.isna(rmse_val) else f"{rmse_val:.3f}")
+    with metric_cols[3]:
+        st.metric("MAE", "--" if pd.isna(mae_val) else f"{mae_val:.3f}")
+    with metric_cols[4]:
+        st.metric("MAPE (%)", "--" if pd.isna(mape_val) else f"{mape_val:.3f}")
+
+    st.markdown("---")
+
+    # Tabs similar to evaluation (+Debug)
+    summary_tab, pred_tab, grid_tab, ts_tab, extremes_tab, debug_tab = st.tabs(["Summary", "Predictions", "3D Grid", "Time Series", "Extremes", "Debug"])
+
+    with summary_tab:
+        # Only predicted statistics available
+        grp = (
+            future_df.groupby("forecast_day")
+            .agg(pred_mean=("predicted_temp", "mean"), pred_max=("predicted_temp", "max"), pred_min=("predicted_temp", "min"))
+            .reset_index()
+        )
+        st.subheader("Forecast Summary (predicted)")
+        _st_dataframe_safe(grp, key=f"forecast_summary_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}")
+
+    with pred_tab:
+        _st_dataframe_safe(future_df, key=f"future_pred_df_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}")
+
+    with grid_tab:
+        day_choice = st.selectbox(
+            "Select day",
+            options=list(range(1, len(future_df['forecast_day'].unique()) + 1)),
+            key=f"future_day_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}",
+        )
+        day_df = future_df[future_df.get("forecast_day", 1) == day_choice]
+        plot_3d_grid(day_df, key=f"future_grid_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}")
+
+    with ts_tab:
+        # Merge past (training+eval) with future predictions so the trend is continuous
+        hist_df = res_eval.get("df_predplot_all")
+        if hist_df is None:
+            hist_df = pd.DataFrame()
+        combined_df = pd.concat([hist_df, future_df], ignore_index=True, sort=False)
+        plot_time_series(
+            combined_df,
+            key=f"future_ts_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}",
+        )
+
+    # ------------------ EXTREMES TAB ------------------
+    with extremes_tab:
+        st.subheader("Daily Predicted Extremes")
+
+        if future_df.empty or "predicted_temp" not in future_df.columns:
+            st.info("No predictions found to compute extremes.")
+        else:
+            tmp = future_df.copy()
+            tmp["date"] = pd.to_datetime(tmp["detection_time"]).dt.date
+
+            rows = []
+            for d, grp in tmp.groupby("date"):
+                # Highest and lowest predicted temperature for the day
+                max_row = grp.loc[grp["predicted_temp"].idxmax()]
+                min_row = grp.loc[grp["predicted_temp"].idxmin()]
+
+                for typ, r in [("Max", max_row), ("Min", min_row)]:
+                    rows.append(
+                        {
+                            "date": d,
+                            "type": typ,
+                            "predicted": r["predicted_temp"],
+                            "grid_x": r.get("grid_x"),
+                            "grid_y": r.get("grid_y"),
+                            "grid_z": r.get("grid_z"),
+                        }
+                    )
+
+            extreme_pred_df = pd.DataFrame(rows)
+            extreme_pred_df.sort_values(["date", "type"], inplace=True)
+            _st_dataframe_safe(extreme_pred_df, key=f"forecast_extremes_{model_name}_{len(rows)}")
+
+    # ------------------ DEBUG TAB ------------------
+    with debug_tab:
+        st.subheader("⚙️ Future Feature Matrix (first 100 rows)")
+        x_future_dbg = st.session_state.get("forecasts", {}).get(model_name, {}).get("X_future")
+        if x_future_dbg is not None:
+            st.dataframe(x_future_dbg.head(100), use_container_width=True)
+            # Compare to evaluation matrix if available
+            eval_res = st.session_state["evaluations"].get(model_name, {})
+            x_eval_dbg = eval_res.get("X_eval")
+            if x_eval_dbg is not None:
+                delta = (x_eval_dbg.mean() - x_future_dbg.mean()).abs().sort_values(ascending=False)
+                st.subheader("|Mean(X_eval) − Mean(X_future)| (Top 20)")
+                st.dataframe(delta.head(20).to_frame(name="abs_diff"), use_container_width=True)
+        else:
+            st.info("X_future matrix not available yet.")
+
+# --------------------------------------------------
+# Helper to create & store forecast
+def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
+    """Generate future_df for *model_name* and store in session_state['forecasts'].
+    Returns True if successful, False otherwise."""
+    res_eval = st.session_state.get("evaluations", {}).get(model_name)
+    if res_eval is None:
+        st.error("Please evaluate the model first.")
+        return False
+
+    base_df = res_eval.get("df_base")
+    categories_map = res_eval.get("categories_map", {})
+    mdl = load_trained_model(model_name)
+
+    if not isinstance(base_df, pd.DataFrame) or mdl is None:
+        st.error("Unable to access base data or model for forecasting.")
+        return False
+
+    # Special handling if the model is *direct* multi-output and horizon <= 3
+    if isinstance(mdl, MultiOutputRegressor) and horizon <= 3:
+        # 1. Take **last known row** per physical sensor as input snapshot
+        sensors_key = [c for c in [
+            "granary_id", "heap_id", "grid_x", "grid_y", "grid_z"
+        ] if c in base_df.columns]
+
+        last_rows = (
+            base_df.sort_values("detection_time")
+            .groupby(sensors_key, dropna=False)
+            .tail(1)
+            .copy()
+        )
+
+        # Prepare design matrix
+        X_snap, _ = features.select_feature_target_multi(
+            last_rows, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+        )
+        model_feats = get_feature_cols(mdl, X_snap)
+        X_snap_aligned = X_snap.reindex(columns=model_feats, fill_value=0)
+
+        preds_mat = model_utils.predict(mdl, X_snap_aligned)  # shape (n, 3)
+
+        # Build future frames for 1, 2, 3-day horizons ------------------
+        all_future_frames: list[pd.DataFrame] = []
+        last_dt = pd.to_datetime(last_rows["detection_time"]).max()
+
+        for h in range(1, horizon + 1):
+            day_frame = last_rows.copy()
+            day_frame["detection_time"] = last_dt + pd.Timedelta(days=h)
+            day_frame["forecast_day"] = h
+            day_frame["predicted_temp"] = preds_mat[:, h - 1]
+            day_frame["temperature_grain"] = preds_mat[:, h - 1]
+            day_frame[TARGET_TEMP_COL] = preds_mat[:, h - 1]
+            day_frame["is_forecast"] = True
+            all_future_frames.append(day_frame)
+
+        future_df = pd.concat(all_future_frames, ignore_index=True)
+
+        # Clear actual temperature values for forecast rows to avoid confusion in plots
+        future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
+
+        # Assign debug matrix for consistency with fallback path
+        X_day_aligned = X_snap_aligned.copy()
+
+    else:
+        # Fallback – original recursive loop (supports arbitrary horizons)
+        hist_df = base_df.copy()
+        all_future_frames: list[pd.DataFrame] = []
+
+        for d in range(1, horizon + 1):
+            # Generate placeholder rows for ONE day ahead
+            day_df = make_future(hist_df, horizon_days=1)
+            day_df = _inject_future_lag(day_df, hist_df)
+            day_df["forecast_day"] = d
+
+            # Extra features (lags, rolling) before encoding
+            day_df = features.add_multi_lag(day_df, lags=(1,7,30))
+            day_df = features.add_rolling_stats(day_df, window_days=7)
+
+            # Apply categories levels
+            for col, cats in categories_map.items():
+                if col in day_df.columns:
+                    day_df[col] = pd.Categorical(day_df[col], categories=cats)
+
+            X_day, _ = features.select_feature_target_multi(
+                day_df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+            )
+            model_feats = get_feature_cols(mdl, X_day)
+            X_day_aligned = X_day.reindex(columns=model_feats, fill_value=0)
+            preds = model_utils.predict(mdl, X_day_aligned)
+
+            if preds.ndim == 2:
+                preds_step = preds[:, 0]
+            else:
+                preds_step = preds
+
+            day_df["predicted_temp"] = preds_step
+            day_df["temperature_grain"] = preds_step  # feed back as history for next lag
+            day_df[TARGET_TEMP_COL] = preds_step
+            day_df["is_forecast"] = True
+
+            hist_df = pd.concat([hist_df, day_df], ignore_index=True, sort=False)
+            all_future_frames.append(day_df)
+
+        future_df = pd.concat(all_future_frames, ignore_index=True)
+
+        # Clear actual temperature values for forecast rows to avoid confusion in plots
+        future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
+
+    st.session_state.setdefault("forecasts", {})[model_name] = {
+        "future_df": future_df,
+        "future_horizon": horizon,
+        "X_future": X_day_aligned,  # last horizon step matrix for debug
+    }
+    return True
+
+
+# ---------------- Utility to extract feature column order from a model -----------------
+def get_feature_cols(model, X_fallback: pd.DataFrame) -> list[str]:
+    """Return the exact feature columns the *model* expects.
+
+    1. scikit-learn 1.0+ estimators expose ``feature_names_in_``.
+    2. LightGBM exposes ``feature_name_``.
+    3. Fallback: use the columns of *X_fallback* (already aligned for current dataset).
+    """
+    if hasattr(model, "feature_names_in_"):
+        return list(getattr(model, "feature_names_in_"))
+    if hasattr(model, "feature_name_"):
+        return list(getattr(model, "feature_name_"))
+    return list(X_fallback.columns)
+
+
+# ----------------- Helper for future lag injection -----------------
+def _inject_future_lag(future_df: pd.DataFrame, history_df: pd.DataFrame) -> pd.DataFrame:
+    """Populate lag_temp_1d in *future_df* using the last known
+    temperature_grain for each sensor from *history_df*.  Assumes both frames
+    contain grid_x/y/z columns.
+    """
+    if {"grid_x", "grid_y", "grid_z", "temperature_grain"}.issubset(history_df.columns):
+        last_vals = (
+            history_df.sort_values("detection_time")
+            .dropna(subset=["temperature_grain"])
+            .groupby(["grid_x", "grid_y", "grid_z"])["temperature_grain"]
+            .last()
+        )
+        idx = future_df.set_index(["grid_x", "grid_y", "grid_z"]).index
+        future_df["lag_temp_1d"] = [last_vals.get(key, np.nan) for key in idx]
+    return future_df
+
+
+# ---------------------------------------------------------------------
+# Common dataframe preprocessing (clean → fill → features → lag → sort)
+# ---------------------------------------------------------------------
+
+def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Run the full data-prep pipeline exactly once."""
+    if df.empty:
+        return df
+    _d("Starting basic_clean…")
+    before_cols = list(df.columns)
+    df = cleaning.basic_clean(df)
+    _d(f"basic_clean: cols before={len(before_cols)} after={len(df.columns)} rows={len(df)}")
+
+    # -------------------------------------------------------------
+    # 1️⃣ Insert missing calendar-day rows first
+    # -------------------------------------------------------------
+    df = _insert_calendar_gaps(df)
+    _d("insert_calendar_gaps: added rows for missing dates")
+
+    # -------------------------------------------------------------
+    # 2️⃣ Interpolate numeric columns per sensor across the now-complete
+    #    timeline so gap rows take the average of surrounding real values.
+    # -------------------------------------------------------------
+    df = _interpolate_sensor_numeric(df)
+    _d("_interpolate_sensor_numeric: linear interpolation applied per sensor")
+
+    # -------------------------------------------------------------
+    # 3️⃣ Final fill_missing to tidy up any residual NaNs (categoricals etc.)
+    # -------------------------------------------------------------
+    na_before = df.isna().sum().sum()
+    df = cleaning.fill_missing(df)
+    na_after = df.isna().sum().sum()
+    _d(f"fill_missing (final): total NaNs before={na_before} after={na_after}")
+
+    df = features.create_time_features(df)
+    _d("create_time_features: added year/month/day/hour cols")
+    df = features.create_spatial_features(df)
+    _d("create_spatial_features: removed grid_index if present")
+    before_lag_na = df["temperature_grain"].isna().sum() if "temperature_grain" in df.columns else 0
+    df = features.add_sensor_lag(df)
+    after_lag_na = df["lag_temp_1d"].isna().sum() if "lag_temp_1d" in df.columns else 0
+    _d(f"add_sensor_lag: lag NaNs={after_lag_na} (target NaNs before={before_lag_na})")
+    # Ensure group identifiers available for downstream splitting/evaluation
+    df = assign_group_id(df)
+    _d("assign_group_id: _group_id column added to dataframe")
+    df = comprehensive_sort(df)
+    _d("comprehensive_sort: dataframe sorted by granary/heap/grid/date")
+
+    # -------------------------------------------------------------
+    # 4️⃣ Extra temperature features (multi-lag, rolling stats, delta)
+    # -------------------------------------------------------------
+    df = features.add_multi_lag(df, lags=(1,7,30))
+    df = features.add_rolling_stats(df, window_days=7)
+    _d("add_multi_lag & add_rolling_stats: extra features added")
+
+    # -------------------------------------------------------------
+    # 5️⃣ Multi-horizon targets (1–3 days ahead)
+    # -------------------------------------------------------------
+    df = features.add_multi_horizon_targets(df, horizons=(1, 2, 3))  # NEW
+    _d("add_multi_horizon_targets: future target columns added")
+
+    return df
+
+
+# ---------------------------------------------------------------------
+# Helper: insert rows for missing calendar dates per sensor
+# ---------------------------------------------------------------------
+
+def _insert_calendar_gaps(df: pd.DataFrame) -> pd.DataFrame:
+    """Return *df* where any missing *calendar days* for each sensor are
+    back-filled with synthetic rows so models see a continuous timeline.
+
+    • Sensor grouping columns: granary_id, heap_id, grid_x/y/z (subset present).
+    • For each missing date, copies the most recent known row for that sensor
+      and nulls out numeric, non-static measurement columns so they can be
+      filled later (mean, ffill etc.).
+    """
+    if "detection_time" not in df.columns:
+        return df
+
+    df = df.copy()
+    df["detection_time"] = pd.to_datetime(df["detection_time"], errors="coerce")
+
+    group_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in df.columns]
+    if not group_cols:
+        group_cols = []  # treat whole frame as one group
+
+    frames = [df]
+
+    # Helper to decide which numeric cols are *measurements* (varying) vs static
+    static_like = set(group_cols + ["granary_id", "heap_id", "grain_type", "warehouse_type"])  # do not null
+
+    for key, sub in df.groupby(group_cols) if group_cols else [(None, df)]:
+        sub = sub.sort_values("detection_time")
+        date_floor = sub["detection_time"].dt.floor("D")
+        full_range = pd.date_range(date_floor.min(), date_floor.max(), freq="D")
+        missing_dates = sorted(set(full_range.date) - set(date_floor.dt.date.unique()))
+        if not missing_dates:
+            continue
+
+        # Use last known row as template (static cols correct)
+        template = sub.iloc[-1].copy()
+
+        new_rows = []
+        for md in missing_dates:
+            row = template.copy()
+            row["detection_time"] = pd.Timestamp(md)
+            # Null out non-static numeric columns to be filled later
+            for col in df.select_dtypes(include=[np.number]).columns:
+                if col not in static_like:
+                    row[col] = np.nan
+            new_rows.append(row)
+
+        if new_rows:
+            frames.append(pd.DataFrame(new_rows))
+
+    df_full = pd.concat(frames, ignore_index=True)
+    return df_full
+
+
+# ---------------------------------------------------------------------
+# Helper to fetch raw (possibly organised) dataframe
+# ---------------------------------------------------------------------
+
+def _get_active_df(uploaded_file):
+    """Return the raw dataframe – organised slice concat if available."""
+    if st.session_state.get("organized_df") is not None:
+        return st.session_state["organized_df"].copy()
+    return load_uploaded_file(uploaded_file)
+
+
+# ---------------------------------------------------------------------
+# Helper to fetch whichever DataFrame (raw/organised) is active & processed
+# ---------------------------------------------------------------------
+
+def _preprocess_cached(df: pd.DataFrame) -> pd.DataFrame:
+    """Wrapper around the heavy preprocessing pipeline (no Streamlit caching – we persist processed CSVs instead)."""
+    _d("⚙️ _preprocess_cached: running full pipeline (no Streamlit cache)")
+    return _preprocess_df(df)
+
+def _get_preprocessed_df(uploaded_file):
+    """Return a fully-preprocessed dataframe (cached in session)."""
+    # --------------------------------------------------------
+    # 0️⃣ Fast-path: if the uploaded file is already a processed
+    #    CSV (name ends with _processed.csv or resides in data/processed),
+    #    simply load and return it.
+    # --------------------------------------------------------
+    if _looks_processed(uploaded_file):
+        try:
+            _d("✅ Detected preprocessed CSV – loading directly, skipping heavy pipeline")
+            df_fast = pd.read_csv(uploaded_file, encoding="utf-8") if isinstance(uploaded_file, (str, pathlib.Path)) else pd.read_csv(uploaded_file.name, encoding="utf-8")
+            st.session_state["processed_df"] = df_fast.copy()
+            return df_fast
+        except Exception as exc:
+            _d(f"⚠️ Could not load preprocessed CSV fast-path: {exc}; falling back to pipeline")
+
+    raw_df = _get_active_df(uploaded_file)
+
+    # Use cached preprocessing to avoid repeating heavy work across reruns
+    proc = _preprocess_cached(raw_df)
+    _d("🔄 Received dataframe from _preprocess_cached (may be cache hit or miss)")
+
+    # --------------------------------------------------------
+    # Persist a processed CSV alongside others for future fast-path
+    # --------------------------------------------------------
+    try:
+        if hasattr(uploaded_file, "name"):
+            orig_name = pathlib.Path(uploaded_file.name).stem
+        else:
+            orig_name = pathlib.Path(uploaded_file).stem if isinstance(uploaded_file, (str, pathlib.Path)) else "uploaded"
+
+        processed_dir = pathlib.Path("data/processed")
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        out_csv = processed_dir / f"{orig_name}_processed.csv"
+        if not out_csv.exists():
+            proc.to_csv(out_csv, index=False, encoding="utf-8")
+            _d(f"💾 Saved processed CSV to {out_csv}")
+    except Exception as exc:
+        _d(f"⚠️ Could not persist processed CSV: {exc}")
+
+    st.session_state["processed_df"] = proc.copy()
+    return proc
+
+
+# ---------------------------------------------------------------------
+# Helper to safely display DataFrames in Streamlit (Category→str)
+# ---------------------------------------------------------------------
+
+def _st_dataframe_safe(df: pd.DataFrame, key: str | None = None):
+    """Wrapper around st.dataframe that converts category columns to string
+    to avoid pyarrow ArrowInvalid errors when categories mix numeric & text.
+    """
+    df_disp = df.copy()
+    for col in df_disp.select_dtypes(include=["category"]).columns:
+        df_disp[col] = df_disp[col].astype(str)
+    st.dataframe(df_disp, use_container_width=True, key=key)
+
+
+# ---------------------------------------------------------------------
+# Helper to guess if an uploaded file is already processed
+# ---------------------------------------------------------------------
+
+def _looks_processed(upload):
+    """Return True if *upload* path or name suggests preprocessed dataset."""
+    if isinstance(upload, (str, pathlib.Path)):
+        p = pathlib.Path(upload)
+        if "data/processed" in p.as_posix() or p.name.endswith("_processed.csv"):
+            return True
+    elif hasattr(upload, "name"):
+        name = upload.name
+        if name.endswith("_processed.csv"):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------
+# Helper: numeric interpolation per sensor across calendar-completed frame
+# ---------------------------------------------------------------------
+
+def _interpolate_sensor_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """For each sensor group, linearly interpolate numeric columns along
+    chronological order so values for synthetic gap rows equal the average of
+    previous and next real measurements."""
+
+    if "detection_time" not in df.columns:
+        return df
+
+    df = df.copy()
+    df["detection_time"] = pd.to_datetime(df["detection_time"], errors="coerce")
+    df.sort_values("detection_time", inplace=True)
+
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if not num_cols:
+        return df
+
+    group_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in df.columns]
+    if group_cols:
+        df[num_cols] = (
+            df.groupby(group_cols)[num_cols]
+            .apply(lambda g: g.interpolate(method="linear").ffill().bfill())
+            .reset_index(level=group_cols, drop=True)
+        )
+    else:
+        df[num_cols] = df[num_cols].interpolate(method="linear").ffill().bfill()
+
+    return df
+
+
+# -------------------------------------------------------------------
+# NEW – fixed‐window split (last *n_days* for training)  Jun-2025
+# -------------------------------------------------------------------
+
+
+def split_train_last_n_days(df: pd.DataFrame, n_days: int = 30):
+    """Return (df_train, df_eval) where training data is restricted to the
+    most recent *n_days* of records (by unique date).  All earlier data
+    becomes the evaluation set.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Full dataset ordered arbitrarily.
+    n_days : int, default 30
+        Number of unique dates to keep for training.
+    """
+    if df.empty or "detection_time" not in df.columns:
+        return df, pd.DataFrame()
+
+    df = df.copy()
+    df["_date"] = pd.to_datetime(df["detection_time"]).dt.date
+
+    unique_dates = sorted(df["_date"].unique())
+    if not unique_dates:
+        return df, pd.DataFrame()
+
+    # Latest *n_days* are reserved for evaluation; all earlier data for training
+    cutoff_dates = unique_dates[-n_days:]
+
+    df_eval = df[df["_date"].isin(cutoff_dates)].copy()
+    df_train = df[~df["_date"].isin(cutoff_dates)].copy()
+
+    # Assign forecast_day within evaluation set: 1 = oldest day in eval, …
+    date_to_idx = {date: idx for idx, date in enumerate(sorted(cutoff_dates), start=1)}
+    df_eval["forecast_day"] = df_eval["_date"].map(date_to_idx).astype(int)
+
+    df_train.drop(columns=["_date"], inplace=True)
+    df_eval.drop(columns=["_date"], inplace=True)
+    return df_train, df_eval
+
+
+if __name__ == "__main__":
+    main() 
