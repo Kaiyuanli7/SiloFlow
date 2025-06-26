@@ -1,113 +1,141 @@
-# 🛢️ SiloFlow
+# 🛢️ SiloFlow – Grain-Temperature Forecasting Pipeline
 
-SiloFlow is a lightweight end-to-end pipeline that ingests sensor data from grain warehouses, cleans & enriches it, trains a predictive model, and serves forecasts through an interactive Streamlit dashboard.
+SiloFlow is an end-to-end toolkit that ingests raw sensor CSVs from grain warehouses, cleans & enriches the data, trains a machine-learning model, and visualises both historical and forecast temperatures through a Streamlit dashboard.
 
-> **What's New (May 2025)**  
-> • Project renamed to **SiloFlow** (imports remain backward-compatible via an alias).  
-> • Supports the **StorePoint** CSV export format  
-> • Cascaded *Warehouse → Silo* selectors in the UI  
-> • Robust metric handling when some rows lack ground-truth temperatures  
-> • Utility script `scripts/fix_training_csv.py` to strip errant commas in legacy dumps
+The project started as *GranaryPredict* and was renamed in May-2025 – imports remain backward-compatible via the `siloflow` ↔︎ `granarypredict` alias.
 
-## Features
-1. Data ingestion from CSV or REST APIs
-2. Data cleaning & missing-value handling
-3. Feature engineering (spatial + temporal)
-4. Baseline RandomForest temperature model
-5. 3-D grid visualization of silo temperatures
-6. Alerting when predicted temps exceed safe thresholds
-7. Time-series cross-validation and choice between RandomForest or HistGradientBoosting models
-8. Per-warehouse / per-silo evaluation & forecasts
+---
 
-## Project Structure
+## Key Capabilities
+
+1. **Data ingestion** – parse the StorePoint/Result-147 CSV export or any file mapped to the canonical schema.
+2. **Cleaning & imputation** – handle duplicates, obvious sentinels (‐999/“NA”), forward/back-fill categorical gaps, statistical fill for numerics.
+3. **Feature engineering**
+   • cyclic calendar features (month/hour sin & cos)  
+   • 1-, 7-, 30-day sensor lag + ∆T  
+   • rolling mean/std windows  
+   • auto-label-encoding for categoricals
+4. **Model zoo** – Random Forest, HistGradientBoost, tuned LightGBM (+ optional Multi-Output wrapper).  
+   Hyper-parameters can be overridden at run-time or via `granarypredict.model.train_*` helpers.
+5. **Evaluation suite** – per-horizon MAE/RMSE, overall confidence & accuracy, plus a brand-new *Extremes* tab that spot-lights biggest over/under predictions and average daily error.
+6. **Forecasting** – one-click generation of t+1…t+3 day predictions; optionally future-safe (excludes environment-only columns).
+7. **Cascaded selectors** – Warehouse → Silo filters propagate across all plots & tables.
+8. **Synthetic data generator** – create reproducible demo datasets for quick experimentation.
+
+---
+
+## Directory Overview
 ```
-granarypredict/       # Core Python package (ingestion, cleaning, features, modelling)
-app/                  # Streamlit dashboard – launch with `streamlit run app/Dashboard.py`
-data/
-  ├─ preloaded/       # Sample CSVs you can try immediately
-  ├─ raw/             # Original dumps (unchanged)
-  └─ processed/       # Cleaned CSVs (output of `fix_training_csv.py`)
-models/               # Saved models (.joblib) – auto-created
-scripts/              # Helper utilities (CSV fixer, synthetic data generator …)
-```
-
-## Full Setup Guide (Windows cmd.exe)
-
-1. Download / clone the repository
-   ```cmd
-   git clone -b master https://github.com/kaiyaunli7/siloflow
-   git clone -b v1 --single-branch https://github.com/Kaiyuanli7/SiloFlow/
-   cd o3Granary
-   ```
-
-2. Create a fresh virtual environment (uses Python 3.11 path—adjust if different)
-   ```cmd
-   "C:\Users\<you>\AppData\Local\Programs\Python\Python311\python.exe" -m venv .venv
-   ```
-
-3. Activate the virtual environment
-   ```cmd
-   .venv\Scripts\activate.bat        :: cmd.exe
-   ````powershell
-   .\.venv\Scripts\Activate.ps1      # PowerShell
-   ```
-   Your prompt will now start with `(.venv)`.
-
-4. Upgrade pip and install project requirements (Tsinghua mirror used as example)
-   ```cmd
-   python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
-   pip install -r requirements.txt     -i https://pypi.tuna.tsinghua.edu.cn/simple
-   ```
-
-5. Ensure Python can find the local `granarypredict/` package:
-   ```cmd
-   "pip install -e ." inside the virtual env
-   :: close & reopen cmd, then `activate` again
-   ```
-
-6. (Optional) Generate a synthetic sensor CSV for testing
-   ```cmd
-   python scripts\generate_fake_sensor_data.py
-   :: writes data\raw\synthetic_sensor_data.csv
-   ```
-
-7. Launch the Streamlit dashboard
-   ```cmd
-   streamlit run app\Dashboard.py
-   ```
-   The sidebar lets you:
-   1. Upload a CSV (or pick a bundled sample)
-   2. Train / retrain a model (choose algorithm + iterations)
-   3. **Select Warehouse → Silo** to focus on a single silo
-   4. Evaluate (back-test) or Forecast (future) with adjustable horizons
-
-## Working with StorePoint CSVs
-
-The latest export format has the header:
-
-```
-storepoint_id,storepointName,kdjd,kdwd,kqdz,storeId,storeName,locatType,line_no,layer_no,batch,temp,x,y,z,avg_in_temp,max_temp,min_temp,indoor_temp,indoor_humidity,outdoor_temp,outdoor_humidity,storeType
+├─ app/                  # Streamlit dashboard (run this!)
+│   ├─ Dashboard.py
+│   └─ debug_future.py   # optional CLI reproduction of the dashboard logic
+│
+├─ data/
+│   ├─ preloaded/        # sample CSVs shipped with the repo
+│   ├─ raw/              # untouched dumps (and by_silo/ organiser output)
+│   └─ processed/        # cleaned feature tables (optional)
+│
+├─ granarypredict/       # Core Python package
+│   ├─ ingestion.py      # file / API loaders + schema mapping
+│   ├─ cleaning.py       # data cleansing utilities
+│   ├─ features.py       # feature engineering helpers
+│   ├─ model.py          # training / persistence / inference
+│   ├─ evaluate.py       # cross-validation helpers
+│   └─ ...
+│
+├─ models/               # saved .joblib models (auto-created)
+├─ scripts/              # CLI helpers (trainer, synthetic data) 
+└─ README.md             # ← you are here
 ```
 
-`granarypredict.ingestion.standardize_result147` automatically renames these fields to the internal names used by the pipeline:
+---
 
-* `storepointName` → `granary_id`  (warehouse)
-* `storeName` → `heap_id`  (silo)
-* `kdjd` / `kdwd` → `longitude` / `latitude`
-* `kqdz` → `address_cn`
+## Quick-Start (Windows / macOS / Linux)
+```bash
+# 1. Clone & enter repo
+$ git clone https://github.com/kaiyaunli7/siloflow.git
+$ cd siloflow
 
-So you don't need to alter the CSV – just upload it.
+# 2. Create & activate a Python 3.11 virtual environment
+$ python -m venv .venv
+$ source .venv/bin/activate      # Windows: .venv\Scripts\activate.bat
 
-Then upload the fixed file.
+# 3. Install requirements (use a mirror if behind a firewall)
+$ python -m pip install --upgrade pip
+$ pip install -r requirements.txt
+$ pip install -e .               # editable install for granarypredict/
 
-### PowerShell differences
-• Use `Activate.ps1` instead of `activate.bat` to enable the venv.  
-• If scripts are blocked, run `Set-ExecutionPolicy Bypass -Scope Process -Force` once per session.
+# 4. (Optional) generate demo data
+$ python scripts/generate_fake_sensor_data.py --days 45
 
-### Linux / macOS
-Replace the activation command with `source .venv/bin/activate` and omit the `.exe` paths; the rest is the same.
+# 5. Launch dashboard
+$ streamlit run app/Dashboard.py
+```
 
-CSV's should come with the format of 
-storepoint_id,storepointName,storeId,storeName,locatType,line_no,layer_no,batch,temp,x,y,z,avg_in_temp,max_temp,min_temp,indoor_temp,indoor_humidity,outdoor_temp,outdoor_humidity,storeType
+Open http://localhost:8501 and explore:
+1. 📂 **Data** – upload a CSV or pick a bundled sample.  Multi-silo files are auto-organised.
+2. 🏗️ **Train / Retrain** – choose algorithm, iterations, and **split mode**:
+   • *Percentage* (e.g. 80 / 20)  
+   • *Last 30 days* (train on history, validate on the most recent month)
+3. 🔍 **Evaluate Model** – get per-horizon metrics, 3-D grid, time-series, and the **Extremes** analysis:
+   • average daily |error|  
+   • worst over-prediction row per day  
+   • worst under-prediction row per day  
+   • plots of the above
+4. 🔮 **Forecast** – extend predictions into the future and compare max/min hot-spots.
 
-storepoint_id =  d
+---
+
+## Canonical CSV Schema
+Column | Type | Notes
+-------|------|------
+`detection_time` | datetime | timestamp of sensor reading
+`granary_id` | str | warehouse name (中文 allowed)
+`heap_id` | str | silo / heap identifier
+`grid_x, grid_y, grid_z` | int | 3-D probe location
+`temperature_grain` | float | °C at probe
+`temperature_inside/outside` | float | env temps (optional for future-safe models)
+`humidity_warehouse/outside` | float | %RH (optional)
+`avg_grain_temp` | float | daily average (optional)
+
+The `granarypredict.ingestion.standardize_granary_csv()` helper converts StorePoint/Result-147 headers automatically.
+
+---
+
+## Command-Line Utilities
+
+• **Synthetic data**  
+```bash
+python scripts/generate_fake_sensor_data.py --days 30 --grid 4 5 3 \
+       --output data/raw/synthetic_sensor.csv
+```
+
+• **Global model trainer** (multi-file)  
+```bash
+python scripts/train_global_model.py data/raw/*.csv --algo lgbm --n-estimators 1200 --future-safe
+```
+
+• **Data organiser** – split a mixed CSV into `data/raw/by_silo/<granary>/<heap>/<date>.csv`
+```bash
+python -m granarypredict.data_organizer mixed.csv
+```
+
+---
+
+## Extending / Customising
+
+| What you want | Where to look |
+|---------------|--------------|
+Tweak hyper-parameters | `granarypredict/model.py` / dashboard training sidebar |
+Add new features | `granarypredict/features.py` |
+Change alert thresholds | `granarypredict/config.py` |
+Integrate REST weather API | `granarypredict/ingestion.py` |
+
+---
+
+## Contributing
+Pull requests are welcome!  Please run `flake8` & `black`, and test the dashboard locally before submitting.  For significant changes, update this README accordingly.
+
+---
+
+© 2025 Kaiyuan Li – MIT License

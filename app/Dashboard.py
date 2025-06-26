@@ -29,6 +29,98 @@ from lightgbm import LGBMRegressor
 from sklearn.multioutput import MultiOutputRegressor  # NEW
 
 # ---------------------------------------------------------------------
+# 🈯️  Simple i18n helper  (EN / 中文)  -----------------------------------
+# ---------------------------------------------------------------------
+
+
+_TRANSLATIONS_ZH: dict[str, str] = {
+    # Sidebar & section titles
+    "Data": "数据",
+    "Train / Retrain Model": "训练 / 重新训练模型",
+    "Training split mode": "训练拆分模式",
+    "Percentage": "百分比",
+    "Last 30 days": "最近 30 天",
+    "Train split (%)": "训练集比例 (%)",
+    "Algorithm": "算法",
+    "Iterations / Trees": "迭代 / 树数",
+    "Future-safe (exclude env vars)": "未来安全（排除环境变量）",
+    "Evaluate Model": "评估模型",
+    "Select evaluated model": "选择已评估模型",
+    "Generate Forecast": "生成预测",
+    # Tab labels
+    "Summary": "摘要",
+    "Predictions": "预测明细",
+    "3D Grid": "三维网格",
+    "Time Series": "时间序列",
+    "Extremes": "极值",
+    "Debug": "调试",
+    "Evaluation": "评估",
+    "Forecast": "预测",
+    # Extremes plots
+    "Average Daily Absolute Error (h+1)": "每日平均绝对误差 (h+1)",
+    "Over-Prediction (h+1)": "过预测 (h+1)",
+    "Under-Prediction (h+1)": "欠预测 (h+1)",
+    # Misc
+    "Select date": "选择日期",
+    # 🔽 NEW translations
+    "Verbose debug mode": "详细调试模式",
+    "Upload your own CSV": "上传您的 CSV",
+    "Or pick a bundled sample dataset:": "或选择一个捆绑示例数据集：",
+    "Sample dataset": "示例数据集",
+    "Raw Data": "原始数据",
+    "Sorted Data": "已排序数据",
+    "Location Filter": "位置筛选器",
+    "Warehouse": "仓库",
+    "Silo": "筒仓",
+    "Train on uploaded CSV": "使用上传的 CSV 进行训练",
+    "Model file": "模型文件",
+    "Apply to all models": "应用到所有模型",
+    "Evaluate": "评估",
+    "Eval & Forecast": "评估并预测",
+    "No forecast generated yet for this model.": "该模型尚未生成预测。",
+    "Uploaded file appears empty or unreadable. Please verify the CSV.": "上传的文件为空或无法读取。请检查 CSV。",
+    "Model not found – please train or select another.": "未找到模型 – 请训练或选择其他模型。",
+    "No spatial temperature data present.": "没有空间温度数据。",
+    "Detected mixed dataset – organising into per-silo files…": "检测到混合数据集 – 正在按筒仓整理文件…",
+    "Training model – please wait...": "正在训练模型 – 请稍候...",
+    "No saved models yet.": "尚未保存任何模型。",
+    "Please upload a CSV first to evaluate.": "请先上传 CSV 以进行评估。",
+    "Evaluating model(s) – please wait...": "正在评估模型 – 请稍候...",
+    "Generating forecast…": "正在生成预测…",
+    "Forecast generated – switch tabs to view.": "预测已生成 – 切换选项卡查看。",
+    "Model Leaderboard": "模型排行榜",
+    "No evaluations yet.": "尚无评估结果。",
+    "Debug Log (full)": "调试日志（完整）",
+    "Forecast Summary (per day)": "预测摘要（每日）",
+    "Top Predictive Features": "最具预测力的特征",
+    "Daily Extremes (h+1)": "每日极值 (h+1)",
+    "No horizon-1 predictions available to compute extremes.": "没有可用于计算极值的 h+1 预测。",
+    "Feature Matrices (first 100 rows)": "特征矩阵（前 100 行）",
+    "Training – X_train": "训练 – X_train",
+    "Evaluation – X_eval": "评估 – X_eval",
+    "Model Feature Columns (order)": "模型特征列（顺序）",
+    "No forecast generated for this model yet.": "尚未为该模型生成预测。",
+    "Forecast Summary (predicted)": "预测摘要（预测）",
+    "Daily Predicted Extremes": "每日预测极值",
+    "No predictions found to compute extremes.": "未找到用于计算极值的预测。",
+    "Future Feature Matrix (first 100 rows)": "未来特征矩阵（前 100 行）",
+    "|Mean(X_eval) − Mean(X_future)| (Top 20)": "|Mean(X_eval) − Mean(X_future)|（前 20）",
+    "X_future matrix not available yet.": "X_future 矩阵尚不可用。",
+    "Please evaluate the model first.": "请先评估模型。",
+    "Unable to access base data or model for forecasting.": "无法访问基础数据或模型进行预测。",
+    "High temperature forecast detected for at least one grain type – monitor closely!": "检测到某些粮食类型的高温预测 – 请密切监控！",
+    "All predicted temperatures within safe limits for their grain types": "所有预测温度均在其粮食类型的安全范围内",
+}
+
+
+def _t(msg: str) -> str:
+    """Translate *msg* to Chinese if the user selected that language."""
+    lang = st.session_state.get("lang", "en")
+    if lang == "zh":
+        return _TRANSLATIONS_ZH.get(msg, msg)
+    return msg
+
+# ---------------------------------------------------------------------
 # Debug helper – collects messages in session state
 # ---------------------------------------------------------------------
 
@@ -38,7 +130,7 @@ def _d(msg):
     if not st.session_state.get("debug_mode"):
         return
     import streamlit as _st
-    _st.toast(f"🛠️ {msg}")
+    _st.toast(str(msg))
     log = _st.session_state.setdefault("debug_msgs", [])
     log.append(str(msg))
 
@@ -96,7 +188,7 @@ def load_uploaded_file(uploaded_file) -> pd.DataFrame:
         df = ingestion.standardize_granary_csv(df)
         return df
     except pd.errors.EmptyDataError:
-        st.error("Uploaded file appears empty or unreadable. Please verify the CSV.")
+        st.error(_t("Uploaded file appears empty or unreadable. Please verify the CSV."))
         return pd.DataFrame()
 
 
@@ -121,14 +213,14 @@ def load_trained_model(path: Optional[str | pathlib.Path] = None):
     if path.exists():
         return model_utils.load_model(path)
 
-    st.warning("Model not found – please train or select another.")
+    st.warning(_t("Model not found – please train or select another."))
     return None
 
 
 def plot_3d_grid(df: pd.DataFrame, *, key: str, color_by_delta: bool = False):
     required_cols = {"grid_x", "grid_y", "grid_z", "temperature_grain"}
     if not required_cols.issubset(df.columns):
-        st.info("No spatial temperature data present.")
+        st.info(_t("No spatial temperature data present."))
         return
 
     # Build point hover/label text
@@ -428,20 +520,31 @@ def main():
     st.session_state.setdefault("forecasts", {})  # NEW: container for forecast results
 
     # Debug toggle – placed at very top so early messages are captured
-    st.sidebar.checkbox("Verbose debug mode", key="debug_mode", help="Show detailed internal processing messages", value=True)
+    st.sidebar.checkbox(_t("Verbose debug mode"), key="debug_mode", help="Show detailed internal processing messages", value=True)
 
-    with st.sidebar.expander("📂 Data", expanded=("uploaded_file" not in st.session_state)):
-        uploaded_file = st.file_uploader("Upload your own CSV", type=["csv"], key="uploader")
+    # ---------------- Language selector (appears very top) -------------
+    st.sidebar.selectbox(
+        "Language / 语言",
+        options=["English", "中文"],
+        index=0 if st.session_state.get("lang", "en") == "en" else 1,
+        key="lang_selector",
+        on_change=lambda: st.session_state.update({"lang": "en" if st.session_state.get("lang_selector") == "English" else "zh"}),
+    )
+    # Ensure lang key present
+    st.session_state.setdefault("lang", "en")
+
+    with st.sidebar.expander(_t('Data'), expanded=("uploaded_file" not in st.session_state)):
+        uploaded_file = st.file_uploader(_t("Upload your own CSV"), type=["csv"], key="uploader")
 
         # ------------------------------------------------------------------
         # Offer bundled sample datasets so users can start instantly
         if PRELOADED_DATA_DIR.exists():
             sample_files = sorted(PRELOADED_DATA_DIR.glob("*.csv"))
             if sample_files:
-                st.caption("Or pick a bundled sample dataset:")
+                st.caption(_t("Or pick a bundled sample dataset:"))
                 sample_names = ["-- Select sample --"] + [p.name for p in sample_files]
                 sample_choice = st.selectbox(
-                    "Sample dataset",  # non-empty label for accessibility
+                    _t("Sample dataset"),  # non-empty label for accessibility
                     options=sample_names,
                     key="sample_selector",
                     label_visibility="collapsed",  # hide visually but keep for screen readers
@@ -452,7 +555,7 @@ def main():
 
     if uploaded_file:
         df = load_uploaded_file(uploaded_file)
-        with st.expander("Raw Data", expanded=False):
+        with st.expander(_t("Raw Data"), expanded=False):
             st.dataframe(df, use_container_width=True)
 
         # ------------------------------------------------------------------
@@ -461,7 +564,7 @@ def main():
         if "granary_id" in df.columns and "heap_id" in df.columns:
             uniq_silos = df[["granary_id", "heap_id"]].drop_duplicates().shape[0]
             if uniq_silos > 1 and not st.session_state.get("auto_organised", False) and not _looks_processed(uploaded_file):
-                with st.spinner("Detected mixed dataset – organising into per-silo files…"):
+                with st.spinner(_t("Detected mixed dataset – organising into per-silo files…")):
                     out_root = "data/raw/by_silo"
                     try:
                         # Persist the upload to a temporary file so organizer can read it
@@ -503,14 +606,14 @@ def main():
 
         # Display sorted table directly below Raw Data
         df_sorted_display = df
-        with st.expander("Sorted Data", expanded=False):
+        with st.expander(_t("Sorted Data"), expanded=False):
             _st_dataframe_safe(df_sorted_display, key="sorted")
 
         # ------------------------------
         # Global Warehouse → Silo filter
         # ------------------------------
 
-        st.markdown("### 🏢 Location Filter")
+        st.markdown(f"### {_t('Location Filter')}")
         with st.container():
             # Detect possible column names coming from different CSV formats
             wh_col_candidates = [c for c in ["granary_id", "storepointName"] if c in df.columns]
@@ -524,7 +627,7 @@ def main():
                 warehouses = sorted(df[wh_col].dropna().unique())
                 warehouses_opt = ["All"] + warehouses
                 sel_wh_global = st.selectbox(
-                    "Warehouse",
+                    _t("Warehouse"),
                     options=warehouses_opt,
                     key="global_wh",
                 )
@@ -536,7 +639,7 @@ def main():
                 silos = sorted(df[df[wh_col] == sel_wh_global][silo_col].dropna().unique())
                 silos_opt = ["All"] + silos
                 sel_silo_global = st.selectbox(
-                    "Silo",
+                    _t("Silo"),
                     options=silos_opt,
                     key="global_silo",
                 )
@@ -549,27 +652,27 @@ def main():
                 "silo": sel_silo_global,
             }
 
-        with st.sidebar.expander("🏗️ Train / Retrain Model", expanded=False):
+        with st.sidebar.expander(_t('Train / Retrain Model'), expanded=False):
             model_choice = st.selectbox(
-                "Algorithm",
+                _t("Algorithm"),
                 ["RandomForest", "HistGradientBoosting", "LightGBM"],
                 index=0,
             )
-            n_trees = st.slider("Iterations / Trees", 100, 1000, 300, step=100)
-            future_safe = st.checkbox("Future-safe (exclude env vars)", value=True)
+            n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
+            future_safe = st.checkbox(_t("Future-safe (exclude env vars)"), value=True)
 
             # ---------------- Training split mode -----------------
             split_mode = st.radio(
-                "Training split mode",
-                ["Percentage", "Last 30 days"],
+                _t("Training split mode"),
+                [_t("Percentage"), _t("Last 30 days")],
                 index=0,
                 horizontal=True,
                 help="Choose how to divide data into training vs validation sets.",
             )
 
-            if split_mode == "Percentage":
+            if split_mode == _t("Percentage"):
                 train_pct = st.slider(
-                    "Train split (%)",
+                    _t("Train split (%)"),
                     50,
                     100,
                     80,
@@ -582,10 +685,10 @@ def main():
                 train_pct = None
                 use_last_30 = True
 
-            train_pressed = st.button("Train on uploaded CSV")
+            train_pressed = st.button(_t("Train on uploaded CSV"))
 
         if train_pressed and uploaded_file:
-            with st.spinner("Training model – please wait..."):
+            with st.spinner(_t("Training model – please wait...")):
                 # -------- Data preparation --------
                 df = _get_preprocessed_df(uploaded_file)
 
@@ -686,32 +789,32 @@ def main():
                 st.session_state["last_train_pct"] = 100 if train_pct == 100 else train_pct
 
         # Existing model evaluation
-        with st.sidebar.expander("🔍 Evaluate Model", expanded=False):
+        with st.sidebar.expander(_t('Evaluate Model'), expanded=False):
             model_files = list_available_models()
             if not model_files:
-                st.write("No saved models yet.")
+                st.write(_t("No saved models yet."))
                 eval_pressed = False
                 selected_model = None
                 eval_fc_pressed = False
                 all_models_chk = False
             else:
-                selected_model = st.selectbox("Model file", model_files)
+                selected_model = st.selectbox(_t("Model file"), model_files)
                 # Checkbox to act on all models
-                all_models_chk = st.checkbox("Apply to all models", key="chk_eval_all")
+                all_models_chk = st.checkbox(_t("Apply to all models"), key="chk_eval_all")
 
                 col_eval, col_evalfc = st.columns([1,1])
                 with col_eval:
-                    eval_pressed = st.button("Evaluate", key="btn_eval_single", use_container_width=True)
+                    eval_pressed = st.button(_t("Evaluate"), key="btn_eval_single", use_container_width=True)
                 with col_evalfc:
-                    eval_fc_pressed = st.button("Eval & Forecast", key="btn_eval_fc", use_container_width=True)
+                    eval_fc_pressed = st.button(_t("Eval & Forecast"), key="btn_eval_fc", use_container_width=True)
 
         if (eval_pressed or eval_fc_pressed):
             if uploaded_file is None:
-                st.warning("Please upload a CSV first to evaluate.")
+                st.warning(_t("Please upload a CSV first to evaluate."))
             else:
                 # Determine which models to evaluate
                 target_models = list_available_models() if all_models_chk else [selected_model]
-                with st.spinner("Evaluating model(s) – please wait..."):
+                with st.spinner(_t("Evaluating model(s) – please wait...")):
                     df = _get_preprocessed_df(uploaded_file)
                     # Use same train/test split fraction recorded during training (default 20%)
                     test_frac = max(0.01, 1 - st.session_state.get("last_train_pct", 80)/100)
@@ -863,7 +966,7 @@ def main():
 
                     # If user requested Eval & Forecast, automatically create forecast for selected model
                     if eval_fc_pressed:
-                        st.sidebar.write("Generating forecast…")
+                        st.sidebar.write(_t("Generating forecast…"))
                         models_to_fc = target_models  # already respects all_models_chk
                         for mdl in models_to_fc:
                             generate_and_store_forecast(mdl, horizon=3)
@@ -875,7 +978,7 @@ def main():
         active_model = st.session_state.get("active_model", eval_keys[0])
 
         chosen_model = st.selectbox(
-            "Select evaluated model",
+            _t("Select evaluated model"),
             options=eval_keys,
             index=eval_keys.index(active_model) if active_model in eval_keys else 0,
         )
@@ -883,7 +986,7 @@ def main():
         st.session_state["active_model"] = chosen_model
 
         # Inner tabs for the chosen model
-        inner_tabs = st.tabs(["Evaluation", "Forecast"])
+        inner_tabs = st.tabs([_t("Evaluation"), _t("Forecast")])
 
         # --- Evaluation Tab ---
         with inner_tabs[0]:
@@ -894,20 +997,20 @@ def main():
             if chosen_model in st.session_state.get("forecasts", {}):
                 render_forecast(chosen_model)
             else:
-                st.info("No forecast generated yet for this model.")
-                if st.button("Generate Forecast", key=f"btn_gen_fc_main_{chosen_model}"):
-                    with st.spinner("Generating forecast…"):
+                st.info(_t("No forecast generated yet for this model."))
+                if st.button(_t("Generate Forecast"), key=f"btn_gen_fc_main_{chosen_model}"):
+                    with st.spinner(_t("Generating forecast…")):
                         if generate_and_store_forecast(chosen_model, horizon=3):
-                            st.success("Forecast generated – switch tabs to view.")
+                            st.success(_t("Forecast generated – switch tabs to view."))
 
     # --------------------------------------------------
     # Leaderboard (full-width collapsible panel) -----------------------------------
     evals = st.session_state["evaluations"]
 
     st.markdown("---")
-    with st.expander("🏆 Model Leaderboard", expanded=False):
+    with st.expander(_t('Model Leaderboard'), expanded=False):
         if not evals:
-            st.write("No evaluations yet.")
+            st.write(_t("No evaluations yet."))
         else:
             data = []
             for name, d in evals.items():
@@ -932,7 +1035,7 @@ def main():
     if st.session_state.get("debug_mode"):
         dbg_log = st.session_state.get("debug_msgs", [])
         if dbg_log:
-            with st.expander("🛠️ Debug Log (full)", expanded=False):
+            with st.expander(_t('Debug Log (full)'), expanded=False):
                 st.code("\n".join(dbg_log), language="text")
 
 
@@ -1011,11 +1114,11 @@ def render_evaluation(model_name: str):
 
     st.markdown("---")
 
-    summary_tab, pred_tab, grid_tab, ts_tab, extremes_tab, debug_tab = st.tabs(["Summary", "Predictions", "3D Grid", "Time Series", "Extremes", "Debug"])
+    summary_tab, pred_tab, grid_tab, ts_tab, extremes_tab, debug_tab = st.tabs([_t("Summary"), _t("Predictions"), _t("3D Grid"), _t("Time Series"), _t("Extremes"), _t("Debug")])
 
     with summary_tab:
         if "predicted_temp" in df_eval.columns:
-            st.subheader("Forecast Summary (per day)")
+            st.subheader(_t("Forecast Summary (per day)"))
             st.dataframe(
                 forecast_summary(df_eval),
                 use_container_width=True,
@@ -1027,14 +1130,14 @@ def render_evaluation(model_name: str):
                 return row["predicted_temp"] >= thresh
 
             if df_eval.apply(exceeds, axis=1).any():
-                st.error("⚠️ High temperature forecast detected for at least one grain type – monitor closely!")
+                st.error(_t("High temperature forecast detected for at least one grain type – monitor closely!"))
             else:
-                st.success("All predicted temperatures within safe limits for their grain types")
+                st.success(_t("All predicted temperatures within safe limits for their grain types"))
 
             # ---------------- Top Features ----------------
             fi_df = res.get("feature_importance")
             if fi_df is not None and not fi_df.empty:
-                st.markdown("### Top Predictive Features")
+                st.markdown(f"### {_t('Top Predictive Features')}")
                 st.dataframe(fi_df.head(15), use_container_width=True, key=f"feat_imp_{model_name}")
 
     with pred_tab:
@@ -1044,7 +1147,7 @@ def render_evaluation(model_name: str):
         # Build list of unique dates present in evaluation subset only
         unique_dates = sorted(pd.to_datetime(df_eval["detection_time"]).dt.floor("D").unique())
         date_choice = st.selectbox(
-            "Select date",
+            _t("Select date"),
             options=[d.strftime("%Y-%m-%d") for d in unique_dates],
             key=f"day_{model_name}_grid_{len(unique_dates)}",
         )
@@ -1069,11 +1172,11 @@ def render_evaluation(model_name: str):
 
     # ------------------ EXTREMES TAB ------------------
     with extremes_tab:
-        st.subheader("Daily Extremes (h+1)")
+        st.subheader(_t("Daily Extremes (h+1)"))
 
         df_eval_actual = df_eval[df_eval[TARGET_TEMP_COL].notna()].copy()
         if df_eval_actual.empty or "pred_h1d" not in df_eval_actual.columns and "predicted_temp" not in df_eval_actual.columns:
-            st.info("No horizon-1 predictions available to compute extremes.")
+            st.info(_t("No horizon-1 predictions available to compute extremes."))
         else:
             # Use column alias – pred_h1d preferred but fall back to predicted_temp
             pred_col = "pred_h1d" if "pred_h1d" in df_eval_actual.columns else "predicted_temp"
@@ -1177,16 +1280,16 @@ def render_evaluation(model_name: str):
 
     # ------------------ DEBUG TAB ------------------
     with debug_tab:
-        st.subheader("⚙️ Feature Matrices (first 100 rows)")
+        st.subheader(f"{_t('Feature Matrices (first 100 rows)')} (Training – X_train)")
         x_train_dbg = res.get("X_train")
         if x_train_dbg is not None:
-            st.write("Training – X_train")
+            st.write(_t("Training – X_train"))
             _st_dataframe_safe(x_train_dbg, key=f"xtrain_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}")
         x_eval_dbg = res.get("X_eval")
         if x_eval_dbg is not None:
-            st.write("Evaluation – X_eval")
+            st.write(_t("Evaluation – X_eval"))
             _st_dataframe_safe(x_eval_dbg, key=f"xeval_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}")
-        st.write("Model Feature Columns (order)")
+        st.write(_t("Model Feature Columns (order)"))
         st.code(", ".join(res.get("feature_cols", [])))
 
 
@@ -1194,7 +1297,7 @@ def render_forecast(model_name: str):
     """Render the forecast view (if available) for *model_name*."""
     forecast_data = st.session_state.get("forecasts", {}).get(model_name)
     if not forecast_data:
-        st.info("No forecast generated for this model yet.")
+        st.info(_t("No forecast generated for this model yet."))
         return
 
     # -------- Initial dataframe & warehouse/silo filters --------
@@ -1244,7 +1347,7 @@ def render_forecast(model_name: str):
     st.markdown("---")
 
     # Tabs similar to evaluation (+Debug)
-    summary_tab, pred_tab, grid_tab, ts_tab, extremes_tab, debug_tab = st.tabs(["Summary", "Predictions", "3D Grid", "Time Series", "Extremes", "Debug"])
+    summary_tab, pred_tab, grid_tab, ts_tab, extremes_tab, debug_tab = st.tabs([_t("Summary"), _t("Predictions"), _t("3D Grid"), _t("Time Series"), _t("Extremes"), _t("Debug")])
 
     with summary_tab:
         # Only predicted statistics available
@@ -1253,7 +1356,7 @@ def render_forecast(model_name: str):
             .agg(pred_mean=("predicted_temp", "mean"), pred_max=("predicted_temp", "max"), pred_min=("predicted_temp", "min"))
             .reset_index()
         )
-        st.subheader("Forecast Summary (predicted)")
+        st.subheader(_t("Forecast Summary (predicted)"))
         _st_dataframe_safe(grp, key=f"forecast_summary_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}")
 
     with pred_tab:
@@ -1281,10 +1384,10 @@ def render_forecast(model_name: str):
 
     # ------------------ EXTREMES TAB ------------------
     with extremes_tab:
-        st.subheader("Daily Predicted Extremes")
+        st.subheader(_t("Daily Predicted Extremes"))
 
         if future_df.empty or "predicted_temp" not in future_df.columns:
-            st.info("No predictions found to compute extremes.")
+            st.info(_t("No predictions found to compute extremes."))
         else:
             tmp = future_df.copy()
             tmp["date"] = pd.to_datetime(tmp["detection_time"]).dt.date
@@ -1313,7 +1416,7 @@ def render_forecast(model_name: str):
 
     # ------------------ DEBUG TAB ------------------
     with debug_tab:
-        st.subheader("⚙️ Future Feature Matrix (first 100 rows)")
+        st.subheader(f"{_t('Future Feature Matrix (first 100 rows)')} (Training – X_train)")
         x_future_dbg = st.session_state.get("forecasts", {}).get(model_name, {}).get("X_future")
         if x_future_dbg is not None:
             st.dataframe(x_future_dbg.head(100), use_container_width=True)
@@ -1322,10 +1425,10 @@ def render_forecast(model_name: str):
             x_eval_dbg = eval_res.get("X_eval")
             if x_eval_dbg is not None:
                 delta = (x_eval_dbg.mean() - x_future_dbg.mean()).abs().sort_values(ascending=False)
-                st.subheader("|Mean(X_eval) − Mean(X_future)| (Top 20)")
+                st.subheader(_t("|Mean(X_eval) − Mean(X_future)| (Top 20)"))
                 st.dataframe(delta.head(20).to_frame(name="abs_diff"), use_container_width=True)
         else:
-            st.info("X_future matrix not available yet.")
+            st.info(_t("X_future matrix not available yet."))
 
 # --------------------------------------------------
 # Helper to create & store forecast
@@ -1334,7 +1437,7 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
     Returns True if successful, False otherwise."""
     res_eval = st.session_state.get("evaluations", {}).get(model_name)
     if res_eval is None:
-        st.error("Please evaluate the model first.")
+        st.error(_t("Please evaluate the model first."))
         return False
 
     base_df = res_eval.get("df_base")
@@ -1342,7 +1445,7 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
     mdl = load_trained_model(model_name)
 
     if not isinstance(base_df, pd.DataFrame) or mdl is None:
-        st.error("Unable to access base data or model for forecasting.")
+        st.error(_t("Unable to access base data or model for forecasting."))
         return False
 
     # Special handling if the model is *direct* multi-output and horizon <= 3
@@ -1613,7 +1716,7 @@ def _get_active_df(uploaded_file):
 
 def _preprocess_cached(df: pd.DataFrame) -> pd.DataFrame:
     """Wrapper around the heavy preprocessing pipeline (no Streamlit caching – we persist processed CSVs instead)."""
-    _d("⚙️ _preprocess_cached: running full pipeline (no Streamlit cache)")
+    _d("_preprocess_cached: running full pipeline (no Streamlit cache)")
     return _preprocess_df(df)
 
 def _get_preprocessed_df(uploaded_file):
@@ -1630,7 +1733,7 @@ def _get_preprocessed_df(uploaded_file):
             st.session_state["processed_df"] = df_fast.copy()
             return df_fast
         except Exception as exc:
-            _d(f"⚠️ Could not load preprocessed CSV fast-path: {exc}; falling back to pipeline")
+            _d(f"Could not load preprocessed CSV fast-path: {exc}; falling back to pipeline")
 
     raw_df = _get_active_df(uploaded_file)
 
@@ -1654,7 +1757,7 @@ def _get_preprocessed_df(uploaded_file):
             proc.to_csv(out_csv, index=False, encoding="utf-8")
             _d(f"💾 Saved processed CSV to {out_csv}")
     except Exception as exc:
-        _d(f"⚠️ Could not persist processed CSV: {exc}")
+        _d(f"Could not persist processed CSV: {exc}")
 
     st.session_state["processed_df"] = proc.copy()
     return proc
