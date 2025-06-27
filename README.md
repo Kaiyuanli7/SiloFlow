@@ -18,9 +18,10 @@ The project started as *GranaryPredict* and was renamed in May-2025 – imports 
 4. **Model zoo** – Random Forest, HistGradientBoost, tuned LightGBM (+ optional Multi-Output wrapper).  
    Hyper-parameters can be overridden at run-time or via `granarypredict.model.train_*` helpers.
 5. **Evaluation suite** – per-horizon MAE/RMSE, overall confidence & accuracy, plus a brand-new *Extremes* tab that spot-lights biggest over/under predictions and average daily error.
-6. **Forecasting** – one-click generation of t+1…t+3 day predictions; optionally future-safe (excludes environment-only columns).
-7. **Cascaded selectors** – Warehouse → Silo filters propagate across all plots & tables.
-8. **Synthetic data generator** – create reproducible demo datasets for quick experimentation.
+6. **Forecasting** – one-click generation of t+1…t+3-day predictions; optionally *future-safe* (excludes environment-only columns).
+7. **Production REST API** – `/ingest` CSV-upload endpoint and `/forecast` JSON endpoint built with FastAPI & APScheduler; supports automatic weekly retraining and multi-horizon output.
+8. **Cascaded selectors** – Warehouse → Silo filters propagate across all plots & tables.
+9. **Synthetic data generator** – create reproducible demo datasets for quick experimentation.
 
 ---
 
@@ -43,6 +44,7 @@ The project started as *GranaryPredict* and was renamed in May-2025 – imports 
 │   ├─ evaluate.py       # cross-validation helpers
 │   └─ ...
 │
+├─ service/              # FastAPI micro-service (ingest + forecast endpoints)
 ├─ models/               # saved .joblib models (auto-created)
 ├─ scripts/              # CLI helpers (trainer, synthetic data) 
 └─ README.md             # ← you are here
@@ -67,6 +69,9 @@ $ pip install -e .               # editable install for granarypredict/
 
 # 5. Launch dashboard
 $ streamlit run app/Dashboard.py
+
+# 6 (optional) Run REST API server (production use)
+$ uvicorn service.server:app --reload  # visit http://localhost:8000/docs
 ```
 
 Open http://localhost:8501 and explore:
@@ -136,3 +141,19 @@ Pull requests are welcome!  Please run `flake8` & `black`, and test the dashboar
 ---
 
 © 2025 Kaiyuan Li – MIT License
+
+---
+
+## REST API Endpoints
+
+Once the service is running (see step 6 above) interactive Swagger docs are available at `/docs`.  The primary endpoints are:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST   | `/ingest`   | Append a daily CSV dump to the historical store. |
+| POST   | `/forecast` | Return 1-, 2-, 3-day grain-temperature predictions for the given granary as JSON (and persists a CSV under `data/forecast/`). |
+| GET    | `/healthz`  | Simple liveness probe used by Docker/K8s. |
+
+The service schedules a weekly retraining job (cron style) which can be adjusted in `service/schedule_config.json`.
+
+---
