@@ -8,7 +8,7 @@ The project started as *GranaryPredict* and was renamed in May-2025 – imports 
 
 ## Key Capabilities
 
-1. **Data ingestion** – parse the StorePoint/Result-147 CSV export or any file mapped to the canonical schema.
+1. **Data ingestion** – parse the StorePoint CSV export or any file mapped to the canonical schema.
 2. **Cleaning & imputation** – handle duplicates, obvious sentinels (‐999/“NA”), forward/back-fill categorical gaps, statistical fill for numerics.
 3. **Feature engineering**
    • cyclic calendar features (month/hour sin & cos)  
@@ -64,9 +64,6 @@ $ source .venv/bin/activate      # Windows: .venv\Scripts\activate.bat
 $ python -m pip install --upgrade pip
 $ pip install -r requirements.txt
 $ pip install -e .               # editable install for granarypredict/
-
-# 4. (Optional) generate demo data
-$ python scripts/generate_fake_sensor_data.py --days 45
 
 # 5. Launch dashboard
 $ streamlit run app/Dashboard.py
