@@ -110,6 +110,18 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "Unable to access base data or model for forecasting.": "无法访问基础数据或模型进行预测。",
     "High temperature forecast detected for at least one grain type – monitor closely!": "检测到某些粮食类型的高温预测 – 请密切监控！",
     "All predicted temperatures within safe limits for their grain types": "所有预测温度均在其粮食类型的安全范围内",
+    "LightGBM uses early stopping; optimal number of trees will be selected automatically.": "LightGBM 使用提前停止；将自动选择最佳树数量。",
+    "Conf (%)": "置信度 (%)",
+    "Acc (%)": "准确率 (%)",
+    "MAE h+1": "MAE h+1",
+    "MAE h+2": "MAE h+2",
+    "MAE h+3": "MAE h+3",
+    "RMSE h+1": "RMSE h+1",
+    "Confidence (%)": "置信度 (%)",
+    "Accuracy (%)": "准确率 (%)",
+    "RMSE": "RMSE",
+    "MAE": "MAE",
+    "MAPE (%)": "MAPE (%)",
 }
 
 
@@ -555,6 +567,7 @@ def main():
 
     if uploaded_file:
         df = load_uploaded_file(uploaded_file)
+        _d(f"[DATA] Uploaded file loaded – shape={df.shape} cols={list(df.columns)[:10]}…")
         with st.expander(_t("Raw Data"), expanded=False):
             st.dataframe(df, use_container_width=True)
 
@@ -566,7 +579,7 @@ def main():
         # Full preprocessing once
         _d("Running full preprocessing on uploaded dataframe (cached)…")
         df = _get_preprocessed_df(uploaded_file)
-        _d(f"Preprocessed dataframe shape: {df.shape}")
+        _d(f"[DATA] Preprocessing complete – shape={df.shape} cols={list(df.columns)[:10]}…")
 
         # Display sorted table directly below Raw Data
         df_sorted_display = df
@@ -623,7 +636,7 @@ def main():
                 index=0,
             )
             if model_choice == "LightGBM":
-                st.caption("LightGBM uses early stopping; optimal number of trees will be selected automatically.")
+                st.caption(_t("LightGBM uses early stopping; optimal number of trees will be selected automatically."))
                 n_trees = 2000  # upper bound (not shown to user)
             else:
                 n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
@@ -680,7 +693,7 @@ def main():
                 )  # NEW
 
                 # -------- Group-aware hold-out with user-defined split --------
-                _d("Preparing train/test split…")
+                _d(f"[TRAIN] Preparing train/test split – total rows={len(df)} sensors={df[['grid_x','grid_y','grid_z']].drop_duplicates().shape[0] if {'grid_x','grid_y','grid_z'}.issubset(df.columns) else 'N/A'}")
 
                 if use_last_30:
                     df_train_tmp, df_eval_tmp = split_train_last_n_days(df, n_days=30)
@@ -691,10 +704,12 @@ def main():
                         df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
                     )
                     perform_validation = not X_te.empty
+                    _d(f"[SPLIT] Last-30days mode – train rows={len(df_train_tmp)}, val rows={len(df_eval_tmp)}")
                 elif train_pct == 100:
                     X_tr, y_tr = X_all, y_all
                     X_te = y_te = pd.DataFrame()
                     perform_validation = False
+                    _d("[SPLIT] 100% training – no explicit validation set")
                 else:
                     test_frac_chrono = max(0.05, 1 - train_pct / 100)
                     df_train_tmp, df_eval_tmp = split_train_eval_frac(df, test_frac=test_frac_chrono)
@@ -705,16 +720,19 @@ def main():
                         df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
                     )
                     perform_validation = not X_te.empty
+                    _d(f"[SPLIT] Fraction mode ({train_pct}% train) – train rows={len(df_train_tmp)}, val rows={len(df_eval_tmp)}")
 
                 # -------- Model selection & training --------
                 if model_choice == "RandomForest":
                     base_mdl = RandomForestRegressor(n_estimators=n_trees, n_jobs=-1, random_state=42)
                     suffix = "rf"
                     use_wrapper = True
+                    _d(f"[MODEL] RandomForest initialised n_estimators={n_trees}")
                 elif model_choice == "HistGradientBoosting":
                     base_mdl = HistGradientBoostingRegressor(max_depth=None, learning_rate=0.1, max_iter=n_trees, random_state=42)
                     suffix = "hgb"
                     use_wrapper = True
+                    _d(f"[MODEL] HistGradientBoosting initialised max_iter={n_trees}")
                 else:  # LightGBM with early stopping
                     base_params = dict(
                         learning_rate=0.03347500352712116,
@@ -737,6 +755,7 @@ def main():
                 if use_wrapper:
                     mdl = MultiOutputRegressor(base_mdl)
                     mdl.fit(X_tr, y_tr)
+                    _d("[TRAIN] Wrapper model fit complete")
                 else:
                     if perform_validation and not X_te.empty:
                         # Standard early-stopping using external validation split
@@ -888,7 +907,7 @@ def main():
                         )  # NEW
                         X_train_aligned = X_train.reindex(columns=feature_cols_mdl, fill_value=0)
                         preds = model_utils.predict(mdl, X_eval_aligned)
-                        _d(f"Model {mdl_name}: eval predictions shape {preds.shape}")
+                        _d(f"[EVAL] Predictions generated – shape={preds.shape} for model={mdl_name}")
 
                         # -------- Attach predictions to df_eval --------
                         if getattr(preds, "ndim", 1) == 2 and preds.shape[1] >= 3:
@@ -1124,17 +1143,17 @@ def render_evaluation(model_name: str):
 
     metric_cols = st.columns(6)
     with metric_cols[0]:
-        st.metric("Conf (%)", "--" if pd.isna(conf_val) else f"{conf_val:.2f}")
+        st.metric(_t("Conf (%)"), "--" if pd.isna(conf_val) else f"{conf_val:.2f}")
     with metric_cols[1]:
-        st.metric("Acc (%)", "--" if pd.isna(acc_val) else f"{acc_val:.2f}")
+        st.metric(_t("Acc (%)"), "--" if pd.isna(acc_val) else f"{acc_val:.2f}")
     with metric_cols[2]:
-        st.metric("MAE h+1", "--" if pd.isna(mae_h1) else f"{mae_h1:.2f}")
+        st.metric(_t("MAE h+1"), "--" if pd.isna(mae_h1) else f"{mae_h1:.2f}")
     with metric_cols[3]:
-        st.metric("MAE h+2", "--" if pd.isna(mae_h2) else f"{mae_h2:.2f}")
+        st.metric(_t("MAE h+2"), "--" if pd.isna(mae_h2) else f"{mae_h2:.2f}")
     with metric_cols[4]:
-        st.metric("MAE h+3", "--" if pd.isna(mae_h3) else f"{mae_h3:.2f}")
+        st.metric(_t("MAE h+3"), "--" if pd.isna(mae_h3) else f"{mae_h3:.2f}")
     with metric_cols[5]:
-        st.metric("RMSE h+1", "--" if pd.isna(rmse_h1) else f"{rmse_h1:.2f}")
+        st.metric(_t("RMSE h+1"), "--" if pd.isna(rmse_h1) else f"{rmse_h1:.2f}")
 
     st.markdown("---")
 
@@ -1358,15 +1377,15 @@ def render_forecast(model_name: str):
 
     metric_cols = st.columns(5)
     with metric_cols[0]:
-        st.metric("Confidence (%)", "--" if pd.isna(conf_val) else f"{conf_val:.3f}")
+        st.metric(_t("Confidence (%)"), "--" if pd.isna(conf_val) else f"{conf_val:.3f}")
     with metric_cols[1]:
-        st.metric("Accuracy (%)", "--" if pd.isna(acc_val) else f"{acc_val:.3f}")
+        st.metric(_t("Accuracy (%)"), "--" if pd.isna(acc_val) else f"{acc_val:.3f}")
     with metric_cols[2]:
-        st.metric("RMSE", "--" if pd.isna(rmse_val) else f"{rmse_val:.3f}")
+        st.metric(_t("RMSE"), "--" if pd.isna(rmse_val) else f"{rmse_val:.3f}")
     with metric_cols[3]:
-        st.metric("MAE", "--" if pd.isna(mae_val) else f"{mae_val:.3f}")
+        st.metric(_t("MAE"), "--" if pd.isna(mae_val) else f"{mae_val:.3f}")
     with metric_cols[4]:
-        st.metric("MAPE (%)", "--" if pd.isna(mape_val) else f"{mape_val:.3f}")
+        st.metric(_t("MAPE (%)"), "--" if pd.isna(mape_val) else f"{mape_val:.3f}")
 
     st.markdown("---")
 
@@ -1570,6 +1589,7 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
         "future_horizon": horizon,
         "X_future": X_day_aligned,  # last horizon step matrix for debug
     }
+    _d(f"[FORECAST] Stored forecast – rows={len(future_df)}")
     return True
 
 
