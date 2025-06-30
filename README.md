@@ -72,7 +72,7 @@ cmd: pip install -e .               # editable install for granarypredict/
 cmd: streamlit run app/Dashboard.py
 
 Open http://localhost:8501 and explore:
-1. 📂 **Data** – upload a CSV or pick a bundled sample.  Multi-silo files are auto-organised.
+1. 📂 **Data** – upload a CSV or pick a bundled sample.
 2. 🏗️ **Train / Retrain** – choose algorithm, iterations, and **split mode**:
    • *Percentage* (e.g. 80 / 20)  
    • *Last 30 days* (train on history, validate on the most recent month)
@@ -112,11 +112,6 @@ python scripts/generate_fake_sensor_data.py --days 30 --grid 4 5 3 \
 • **Global model trainer** (multi-file)  
 ```bash
 python scripts/train_global_model.py data/raw/*.csv --algo lgbm --n-estimators 1200 --future-safe
-```
-
-• **Data organiser** – split a mixed CSV into `data/raw/by_silo/<granary>/<heap>/<date>.csv`
-```bash
-python -m granarypredict.data_organizer mixed.csv
 ```
 
 ---

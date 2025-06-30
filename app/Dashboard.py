@@ -12,8 +12,8 @@ from granarypredict import cleaning, features, model as model_utils
 from granarypredict.config import ALERT_TEMP_THRESHOLD, MODELS_DIR
 from granarypredict import ingestion
 from granarypredict.data_utils import comprehensive_sort, assign_group_id
-from granarypredict.data_organizer import organize_mixed_csv
-import tempfile
+# from granarypredict.data_organizer import organize_mixed_csv  # deprecated
+from granarypredict.multi_lgbm import MultiLGBMRegressor  # NEW
 
 # Streamlit reload may have stale module; fetch grain thresholds safely
 try:
@@ -559,46 +559,10 @@ def main():
             st.dataframe(df, use_container_width=True)
 
         # ------------------------------------------------------------------
-        # Auto-organise if the upload mixes multiple silos
+        # Auto-organise if the upload mixes multiple silos  (removed in v1.1)
         # ------------------------------------------------------------------
-        if "granary_id" in df.columns and "heap_id" in df.columns:
-            uniq_silos = df[["granary_id", "heap_id"]].drop_duplicates().shape[0]
-            if uniq_silos > 1 and not st.session_state.get("auto_organised", False) and not _looks_processed(uploaded_file):
-                with st.spinner(_t("Detected mixed dataset – organising into per-silo files…")):
-                    out_root = "data/raw/by_silo"
-                    try:
-                        # Persist the upload to a temporary file so organizer can read it
-                        if hasattr(uploaded_file, "read") and not isinstance(uploaded_file, (str, pathlib.Path)):
-                            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-                            tmp.write(uploaded_file.getvalue())
-                            tmp.flush()
-                            input_path = tmp.name
-                        else:
-                            input_path = uploaded_file if isinstance(uploaded_file, (str, pathlib.Path)) else uploaded_file.name
-                        written = organize_mixed_csv(input_path, out_dir=out_root)
-                        # Read all newly created slices back into a single frame for immediate use
-                        import glob, os
-                        slice_files = glob.glob(os.path.join(out_root, "**", "*.csv"), recursive=True)
-                        df_slices = [pd.read_csv(fp, encoding="utf-8") for fp in slice_files]
-                        if df_slices:
-                            concat_df = pd.concat(df_slices, ignore_index=True, sort=False)
-                            st.session_state["organized_df"] = concat_df
-
-                            # Persist a preprocessed version to data/processed
-                            from pathlib import Path
-                            processed_dir = Path("data/processed")
-                            processed_dir.mkdir(parents=True, exist_ok=True)
-                            stem = Path(input_path).stem.replace(" ", "_")
-                            out_csv = processed_dir / f"{stem}_processed.csv"
-                            _preprocess_df(concat_df).to_csv(out_csv, index=False, encoding="utf-8")
-                            st.info(f"Preprocessed CSV written to '{out_csv}'. You can reuse this file directly.")
-                        st.success(f"Organised into {written} slice files under '{out_root}'.")
-                        st.session_state["auto_organised"] = True
-                        # Invalidate previous processed cache
-                        st.session_state.pop("processed_df", None)
-                    except Exception as exc:
-                        st.warning(f"Could not organise mixed CSV: {exc}")
-
+        # (functionality removed)
+        
         # Full preprocessing once
         _d("Running full preprocessing on uploaded dataframe (cached)…")
         df = _get_preprocessed_df(uploaded_file)
@@ -658,7 +622,11 @@ def main():
                 ["RandomForest", "HistGradientBoosting", "LightGBM"],
                 index=0,
             )
-            n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
+            if model_choice == "LightGBM":
+                st.caption("LightGBM uses early stopping; optimal number of trees will be selected automatically.")
+                n_trees = 2000  # upper bound (not shown to user)
+            else:
+                n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
             future_safe = st.checkbox(_t("Future-safe (exclude env vars)"), value=True)
 
             # ---------------- Training split mode -----------------
@@ -742,27 +710,80 @@ def main():
                 if model_choice == "RandomForest":
                     base_mdl = RandomForestRegressor(n_estimators=n_trees, n_jobs=-1, random_state=42)
                     suffix = "rf"
+                    use_wrapper = True
                 elif model_choice == "HistGradientBoosting":
                     base_mdl = HistGradientBoostingRegressor(max_depth=None, learning_rate=0.1, max_iter=n_trees, random_state=42)
                     suffix = "hgb"
-                else:  # LightGBM with tuned defaults
-                    base_mdl = LGBMRegressor(
-                        n_estimators=int(n_trees),  # still respect UI slider
+                    use_wrapper = True
+                else:  # LightGBM with early stopping
+                    base_params = dict(
                         learning_rate=0.03347500352712116,
                         max_depth=7,
                         num_leaves=24,
                         subsample=0.8832753633141975,
                         colsample_bytree=0.6292206613991069,
                         min_child_samples=44,
-                        random_state=42,
-                        n_jobs=-1,
+                    )
+                    base_mdl = MultiLGBMRegressor(
+                        base_params=base_params,
+                        upper_bound_estimators=n_trees,
+                        early_stopping_rounds=100,
                     )
                     suffix = "lgbm"
+                    use_wrapper = False
+                    _d(f"[TRAIN] LightGBM initialised – upper_bound={n_trees}, early_stop=100, base_params={base_params}")
 
-                mdl = MultiOutputRegressor(base_mdl)  # NEW wrapper
-                _d(f"Instantiated MultiOutput {model_choice} with n_trees={n_trees}")
-                mdl.fit(X_tr, y_tr)
-                _d("Model fit on training data")
+                # ---------------- Fit -----------------------
+                if use_wrapper:
+                    mdl = MultiOutputRegressor(base_mdl)
+                    mdl.fit(X_tr, y_tr)
+                else:
+                    if perform_validation and not X_te.empty:
+                        # Standard early-stopping using external validation split
+                        base_mdl.fit(X_tr, y_tr, eval_set=(X_te, y_te), verbose=False)
+                        _d(f"[TRAIN] External early-stopping complete – best_iter={base_mdl.best_iteration_}")
+                        mdl = base_mdl
+                    else:
+                        # ----------------------------------------------------------
+                        # No validation split (user selected 100 % train) –> create
+                        # an internal 90/10 chronological split to pick the best
+                        # iteration, then refit on the full dataset with that
+                        # fixed n_estimators so behaviour matches the legacy flow.
+                        # ----------------------------------------------------------
+                        int_train_df, int_val_df = split_train_eval_frac(df, test_frac=0.1)
+
+                        X_int_tr, y_int_tr = features.select_feature_target_multi(
+                            int_train_df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                        )
+                        X_int_val, y_int_val = features.select_feature_target_multi(
+                            int_val_df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                        )
+
+                        finder = MultiLGBMRegressor(
+                            base_params=base_params,
+                            upper_bound_estimators=n_trees,
+                            early_stopping_rounds=100,
+                        )
+                        finder.fit(X_int_tr, y_int_tr, eval_set=(X_int_val, y_int_val), verbose=False)
+
+                        best_n = finder.best_iteration_ or n_trees
+
+                        # Refit on **all** data with the chosen tree count
+                        final_params = base_params | {"n_estimators": best_n}
+                        final_lgbm = MultiLGBMRegressor(
+                            base_params=final_params,
+                            upper_bound_estimators=best_n,
+                            early_stopping_rounds=0,
+                        )
+                        final_lgbm.fit(X_all, y_all)
+                        mdl = final_lgbm
+                        _d(f"[TRAIN] Refit on full data finished with best_n trees")
+                        _d(
+                            f"[TRAIN] Internal split sizes – train={len(int_train_df)}, val={len(int_val_df)}; "
+                            f"best_n={best_n}"
+                        )
+
+                _d(f"{model_choice} model trained (wrapper={use_wrapper})")
 
                 # Validation on unseen groups (if possible)
                 if perform_validation and not X_te.empty:
@@ -776,7 +797,10 @@ def main():
 
                 # -------- Persist model --------
                 csv_stem = pathlib.Path(uploaded_file.name).stem.replace(" ", "_").lower()
-                model_name = f"{csv_stem}_{'fs_' if future_safe else ''}{suffix}_{n_trees}.joblib"
+                best_iter_val = int(getattr(mdl, 'best_iteration_', n_trees))
+                _d(f"[SAVE] Persisting model with best_iter={best_iter_val}")
+                model_name = f"{csv_stem}_{'fs_' if future_safe else ''}{suffix}_{best_iter_val}.joblib"
+                _d(f"[SAVE] Model written to {model_name}")
                 model_utils.save_model(mdl, name=model_name)
 
             if np.isnan(mae_val):
@@ -911,7 +935,7 @@ def main():
 
                         # -------------- Feature Importance ----------------
                         def _compute_importance(model, feature_cols):
-                            if isinstance(model, MultiOutputRegressor):
+                            if isinstance(model, (MultiOutputRegressor, MultiLGBMRegressor)):
                                 # average over outputs
                                 imps = np.mean([
                                     getattr(est, "feature_importances_", np.zeros(len(feature_cols)))
@@ -1411,8 +1435,11 @@ def render_forecast(model_name: str):
                     )
 
             extreme_pred_df = pd.DataFrame(rows)
-            extreme_pred_df.sort_values(["date", "type"], inplace=True)
-            _st_dataframe_safe(extreme_pred_df, key=f"forecast_extremes_{model_name}_{len(rows)}")
+            if extreme_pred_df.empty:
+                st.info(_t("No predictions found to compute extremes."))
+            else:
+                extreme_pred_df.sort_values(["date", "type"], inplace=True)
+                _st_dataframe_safe(extreme_pred_df, key=f"forecast_extremes_{model_name}_{len(rows)}")
 
     # ------------------ DEBUG TAB ------------------
     with debug_tab:
@@ -1449,7 +1476,7 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
         return False
 
     # Special handling if the model is *direct* multi-output and horizon <= 3
-    if isinstance(mdl, MultiOutputRegressor) and horizon <= 3:
+    if isinstance(mdl, (MultiOutputRegressor, MultiLGBMRegressor)) and horizon <= 3:
         # 1. Take **last known row** per physical sensor as input snapshot
         sensors_key = [c for c in [
             "granary_id", "heap_id", "grid_x", "grid_y", "grid_z"
