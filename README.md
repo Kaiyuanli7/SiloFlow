@@ -53,26 +53,23 @@ The project started as *GranaryPredict* and was renamed in May-2025 – imports 
 ---
 
 ## Quick-Start (Windows / macOS / Linux)
-```bash
+
 # 1. Clone & enter repo
-$ git clone https://github.com/kaiyaunli7/siloflow.git
-$ cd siloflow
+cmd: git clone -b v1 https://github.com/kaiyaunli7/siloflow.git
+cmd: cd siloflow
 
 # 2. Create & activate a Python 3.11 virtual environment
-$ python -m venv .venv
-$ source .venv/bin/activate      # Windows: .venv\Scripts\activate.bat
+cmd: python -m venv .venv
+cmd: .venv\Scripts\activate.bat
 
 # 3. Install requirements (use a mirror if behind a firewall)
-$ python -m pip install --upgrade pip
-$ pip install -r requirements.txt
-$ pip install -e .               # editable install for granarypredict/
+cmd: pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+cmd: python -m pip install --upgrade pip
+cmd: pip install -r requirements.txt
+cmd: pip install -e .               # editable install for granarypredict/
 
 # 5. Launch dashboard
-$ streamlit run app/Dashboard.py
-
-# 6 (optional) Run REST API server (production use)
-$ uvicorn service.server:app --reload  # visit http://localhost:8000/docs
-```
+cmd: streamlit run app/Dashboard.py
 
 Open http://localhost:8501 and explore:
 1. 📂 **Data** – upload a CSV or pick a bundled sample.  Multi-silo files are auto-organised.
