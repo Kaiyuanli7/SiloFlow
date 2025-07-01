@@ -1697,7 +1697,7 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
             day_df["forecast_day"] = d
 
             # Extra features (lags, rolling) before encoding
-            day_df = features.add_multi_lag(day_df, lags=(1,7,30))
+            day_df = features.add_multi_lag(day_df, lags=(1,3,7,14,30))
             day_df = features.add_rolling_stats(day_df, window_days=7)
 
             # Apply categories levels
@@ -1823,7 +1823,7 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     # -------------------------------------------------------------
     # 4️⃣ Extra temperature features (multi-lag, rolling stats, delta)
     # -------------------------------------------------------------
-    df = features.add_multi_lag(df, lags=(1,7,30))
+    df = features.add_multi_lag(df, lags=(1,3,7,14,30))
     df = features.add_rolling_stats(df, window_days=7)
     _d("add_multi_lag & add_rolling_stats: extra features added")
 

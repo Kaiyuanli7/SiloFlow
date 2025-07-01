@@ -207,25 +207,40 @@ def _add_single_lag(df: pd.DataFrame, lag_days: int, *,
 def add_multi_lag(
     df: pd.DataFrame,
     *,
-    lags: tuple[int, ...] = (1, 7, 30),
+    lags: tuple[int, ...] = (1, 3, 7, 14, 30),
     temp_col: str = "temperature_grain",
     timestamp_col: str = "detection_time",
 ) -> pd.DataFrame:
-    """Add multiple lag columns (e.g. 1-, 7-, 30-day) and ΔT feature.
+    """Add multiple lag columns and their *delta-temperature* counterparts.
 
-    Relies on ``add_sensor_lag`` for the 1-day lag and `_add_single_lag` for
-    longer offsets.
+    By default the function now creates lags for 1, 3, 7, 14 and 30 days
+    (``lags=(1, 3, 7, 14, 30)``). For every generated lag column
+    ``lag_temp_<d>d`` a corresponding trend feature
+    ``delta_temp_<d>d`` (current − lag value) is also added.  The 1-day lag is
+    still computed through :pyfunc:`add_sensor_lag`; longer offsets are handled
+    by the private :pyfunc:`_add_single_lag` helper.
     """
 
+    # --- 1) Generate basic lag columns -----------------------------------
+    # Always include the 1-day lag via the dedicated helper for efficiency.
     df = add_sensor_lag(df, temp_col=temp_col, timestamp_col=timestamp_col)
+
+    # Additional lags (>=2 days)
     for d in lags:
         if d == 1:
-            continue
+            continue  # already handled above
         df = _add_single_lag(df, d, temp_col=temp_col, timestamp_col=timestamp_col)
 
-    # ΔT = current − 1-day lag
-    if temp_col in df.columns and "lag_temp_1d" in df.columns:
-        df["delta_temp_1d"] = df[temp_col] - df["lag_temp_1d"]
+    # --- 2) Delta-temperature features ------------------------------------
+    # For every generated lag column, add ΔT = current − lag_d value.  This
+    # captures the short-term warming/cooling trend that often boosts model
+    # performance.
+    for d in lags:
+        lag_col = f"lag_temp_{d}d"
+        delta_col = f"delta_temp_{d}d"
+        if lag_col in df.columns and temp_col in df.columns and delta_col not in df.columns:
+            df[delta_col] = df[temp_col] - df[lag_col]
+
     return df
 
 
