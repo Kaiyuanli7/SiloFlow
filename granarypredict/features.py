@@ -269,7 +269,7 @@ def add_multi_horizon_targets(
     df: pd.DataFrame,
     *,
     target_col: str = "temperature_grain",
-    horizons: tuple[int, ...] = (1, 2, 3),
+    horizons: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7),
     timestamp_col: str = "detection_time",
 ) -> pd.DataFrame:
     """Append future-shifted target columns for each horizon.
@@ -308,7 +308,7 @@ def select_feature_target_multi(
     df: pd.DataFrame,
     *,
     target_col: str = "temperature_grain",
-    horizons: tuple[int, ...] = (1, 2, 3),
+    horizons: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7),
     allow_na: bool = False,
     drop_cols: Tuple[str, ...] = (
         "avg_grain_temp",

@@ -166,6 +166,17 @@ FUTURE_SAFE_EXTRA = [
 # Preset horizons (days) for quick selector controls
 PRESET_HORIZONS = [7, 14, 30, 90, 180, 365]
 
+# -----------------------------------------------------------------------------
+# 🔧 GLOBAL FORECAST HORIZON (days)
+# -----------------------------------------------------------------------------
+# Change **one** number here to adjust how many days ahead the model should
+# learn and predict throughout the entire dashboard.  All downstream helper
+# functions reference HORIZON_TUPLE instead of hard-coding (1, 2, 3).
+
+HORIZON_DAYS: int = 7
+# Tuple (1, 2, …, HORIZON_DAYS)
+HORIZON_TUPLE: tuple[int, ...] = tuple(range(1, HORIZON_DAYS + 1))
+
 # Target column representing daily average grain temperature for evaluation/forecast
 TARGET_TEMP_COL = "temperature_grain"  # per-sensor target for model & metrics
 
@@ -431,20 +442,31 @@ def forecast_summary(df_eval: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
+    # Map numeric forecast_day → actual calendar date (first occurrence)
+    if "detection_time" in df_eval.columns:
+        day_to_date = (
+            pd.to_datetime(df_eval["detection_time"]).dt.floor("D").groupby(df_eval["forecast_day"]).first()
+        )
+        grp["date"] = grp["forecast_day"].map(day_to_date)
+        # Re-order so date is the first column and drop forecast_day numeric index
+        grp = grp[["date", "actual_mean", "pred_mean"]]
+        grp = grp.rename(columns={"date": "calendar_date"})
+    
     # Percent absolute error (only where actual_mean is finite & non-zero)
     with np.errstate(divide="ignore", invalid="ignore"):
         grp["pct_error"] = (grp["pred_mean"] - grp["actual_mean"]).abs() / grp["actual_mean"].replace(0, np.nan) * 100
 
     # Confidence via R² per day (skip NaNs)
     conf_vals: list[float] = []
-    for day in grp["forecast_day"]:
+    for day in df_eval["forecast_day"].unique():
         subset = df_eval[df_eval["forecast_day"] == day][[TARGET_TEMP_COL, "predicted_temp"]].dropna()
         if len(subset) > 1:
             r2 = r2_score(subset[TARGET_TEMP_COL], subset["predicted_temp"])
             conf_vals.append(max(0, min(100, r2 * 100)))
         else:
             conf_vals.append(np.nan)
-    grp["confidence_%"] = conf_vals
+    # Align list length with grp after possibly dropping forecast_day col
+    grp["confidence_%"] = conf_vals[: len(grp)]
 
     return grp
 
@@ -674,14 +696,14 @@ def main():
                 df = _get_preprocessed_df(uploaded_file)
 
                 if "temperature_grain_h1d" not in df.columns:
-                    df = features.add_multi_horizon_targets(df, horizons=(1, 2, 3))
+                    df = features.add_multi_horizon_targets(df, horizons=HORIZON_TUPLE)
 
                 if future_safe:
                     df = df.drop(columns=ENV_COLUMNS + FUTURE_SAFE_EXTRA, errors="ignore")
 
                 # Ensure multi-horizon target columns present (fast-path CSVs may lack them)
                 if "temperature_grain_h1d" not in df.columns:
-                    df = features.add_multi_horizon_targets(df, horizons=(1, 2, 3))
+                    df = features.add_multi_horizon_targets(df, horizons=HORIZON_TUPLE)
 
                 # Consistent sorting & grouping
                 df = comprehensive_sort(df)
@@ -689,7 +711,7 @@ def main():
 
                 # Feature matrix / target (MULTI-OUTPUT)
                 X_all, y_all = features.select_feature_target_multi(
-                    df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                    df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
                 )  # NEW
 
                 # -------- Group-aware hold-out with user-defined split --------
@@ -698,10 +720,10 @@ def main():
                 if use_last_30:
                     df_train_tmp, df_eval_tmp = split_train_last_n_days(df, n_days=30)
                     X_tr, y_tr = features.select_feature_target_multi(
-                        df_train_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                        df_train_tmp, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
                     )
                     X_te, y_te = features.select_feature_target_multi(
-                        df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                        df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
                     )
                     perform_validation = not X_te.empty
                     _d(f"[SPLIT] Last-30days mode – train rows={len(df_train_tmp)}, val rows={len(df_eval_tmp)}")
@@ -714,10 +736,10 @@ def main():
                     test_frac_chrono = max(0.05, 1 - train_pct / 100)
                     df_train_tmp, df_eval_tmp = split_train_eval_frac(df, test_frac=test_frac_chrono)
                     X_tr, y_tr = features.select_feature_target_multi(
-                        df_train_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                        df_train_tmp, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
                     )
                     X_te, y_te = features.select_feature_target_multi(
-                        df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                        df_eval_tmp, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
                     )
                     perform_validation = not X_te.empty
                     _d(f"[SPLIT] Fraction mode ({train_pct}% train) – train rows={len(df_train_tmp)}, val rows={len(df_eval_tmp)}")
@@ -772,10 +794,10 @@ def main():
                         int_train_df, int_val_df = split_train_eval_frac(df, test_frac=0.1)
 
                         X_int_tr, y_int_tr = features.select_feature_target_multi(
-                            int_train_df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                            int_train_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
                         )
                         X_int_val, y_int_val = features.select_feature_target_multi(
-                            int_val_df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3)
+                            int_val_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
                         )
 
                         finder = MultiLGBMRegressor(
@@ -874,12 +896,15 @@ def main():
                     use_gap_fill = False  # skip calendar gap generation – evaluate only real rows
 
                     X_train_base, _ = features.select_feature_target_multi(
-                        df_train_base, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+                        df_train_base, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
                     )  # NEW
 
                     for mdl_name in target_models:
                         df_train = df_train_base.copy()
                         df_eval = df_eval_base.copy()
+
+                        # Evaluation now uses **all** rows from the split so that overlapping
+                        # multi-horizon predictions are preserved; removal of sub-sampling.
 
                         mdl = load_trained_model(mdl_name)
                         if not mdl:
@@ -896,26 +921,26 @@ def main():
                         categories_map = {c: pd.Categorical(df_train[c]).categories.tolist() for c in cat_cols_train_loop}
 
                         X_eval, _ = features.select_feature_target_multi(
-                            df_eval, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+                            df_eval, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
                         )  # NEW
                         # Align features to the model's expected input
                         feature_cols_mdl = get_feature_cols(mdl, X_eval)
                         X_eval_aligned = X_eval.reindex(columns=feature_cols_mdl, fill_value=0)
                         # NEW – generate aligned training design matrix for debugging visualisation
                         X_train, _ = features.select_feature_target_multi(
-                            df_train, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+                            df_train, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
                         )  # NEW
                         X_train_aligned = X_train.reindex(columns=feature_cols_mdl, fill_value=0)
                         preds = model_utils.predict(mdl, X_eval_aligned)
                         _d(f"[EVAL] Predictions generated – shape={preds.shape} for model={mdl_name}")
 
                         # -------- Attach predictions to df_eval --------
-                        if getattr(preds, "ndim", 1) == 2 and preds.shape[1] >= 3:
-                            # Multi-output (horizons 1-3)
-                            df_eval.loc[X_eval_aligned.index, "pred_h1d"] = preds[:, 0]
-                            df_eval.loc[X_eval_aligned.index, "pred_h2d"] = preds[:, 1]
-                            df_eval.loc[X_eval_aligned.index, "pred_h3d"] = preds[:, 2]
-                            # For backward-compat plots keep original col name (uses h1)
+                        if getattr(preds, "ndim", 1) == 2:
+                            # Multi-output – assign for each configured horizon available
+                            for idx, h in enumerate(HORIZON_TUPLE):
+                                if idx < preds.shape[1]:
+                                    df_eval.loc[X_eval_aligned.index, f"pred_h{h}d"] = preds[:, idx]
+                            # For backward-compatibility plots keep original col name (use horizon-1)
                             df_eval.loc[X_eval_aligned.index, "predicted_temp"] = preds[:, 0]
                         else:
                             # Single-output – treat as horizon 1 only
@@ -1012,7 +1037,7 @@ def main():
                         st.sidebar.write(_t("Generating forecast…"))
                         models_to_fc = target_models  # already respects all_models_chk
                         for mdl in models_to_fc:
-                            generate_and_store_forecast(mdl, horizon=3)
+                            generate_and_store_forecast(mdl, horizon=HORIZON_DAYS)
                         st.sidebar.success("Forecast(s) created.")
 
     # Render evaluation view (chosen via dropdown instead of tabs)
@@ -1043,7 +1068,7 @@ def main():
                 st.info(_t("No forecast generated yet for this model."))
                 if st.button(_t("Generate Forecast"), key=f"btn_gen_fc_main_{chosen_model}"):
                     with st.spinner(_t("Generating forecast…")):
-                        if generate_and_store_forecast(chosen_model, horizon=3):
+                        if generate_and_store_forecast(chosen_model, horizon=HORIZON_DAYS):
                             st.success(_t("Forecast generated – switch tabs to view."))
 
     # --------------------------------------------------
@@ -1157,7 +1182,8 @@ def render_evaluation(model_name: str):
 
     st.markdown("---")
 
-    summary_tab, pred_tab, grid_tab, ts_tab, extremes_tab, debug_tab = st.tabs([_t("Summary"), _t("Predictions"), _t("3D Grid"), _t("Time Series"), _t("Extremes"), _t("Debug")])
+    tab_labels = [_t("Summary"), _t("Predictions"), _t("3D Grid"), _t("Time Series"), _t("Anchor 7-day"), _t("Extremes"), _t("Debug")]
+    summary_tab, pred_tab, grid_tab, ts_tab, anchor_tab, extremes_tab, debug_tab = st.tabs(tab_labels)
 
     with summary_tab:
         if "predicted_temp" in df_eval.columns:
@@ -1212,6 +1238,95 @@ def render_evaluation(model_name: str):
             combined_df,
             key=f"time_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}",
         )
+
+    # -------------- ANCHOR 7-DAY TAB -------------------
+    with anchor_tab:
+        st.subheader("7-Day Forecast from Anchor Day (forecast_day=1)")
+
+        if "forecast_day" not in df_eval.columns:
+            st.info("forecast_day column missing – cannot compute anchor forecast.")
+        else:
+            anchor_rows = df_eval[df_eval["forecast_day"] == 1].copy()
+            if anchor_rows.empty:
+                st.info("No rows with forecast_day == 1 in evaluation set.")
+            else:
+                # Determine anchor calendar date
+                anchor_date = pd.to_datetime(anchor_rows["detection_time"]).dt.floor("D").iloc[0]
+
+                records = []
+                for h in HORIZON_TUPLE:
+                    pred_col = f"pred_h{h}d"
+                    target_date = anchor_date + pd.Timedelta(days=h)
+
+                    # ---- Collect per-sensor prediction & actual ----
+                    pred_subset = anchor_rows.copy()
+                    if pred_col not in pred_subset.columns:
+                        continue  # skip if horizon not available
+                    pred_subset = pred_subset.assign(pred_val=pred_subset[pred_col])
+
+                    act_subset = df_eval[pd.to_datetime(df_eval["detection_time"]).dt.floor("D") == target_date].copy()
+                    act_subset = act_subset.assign(actual_val=act_subset[TARGET_TEMP_COL])
+
+                    key_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in pred_subset.columns and c in act_subset.columns]
+
+                    merged = pred_subset[key_cols + ["pred_val"]].merge(
+                        act_subset[key_cols + ["actual_val"]], on=key_cols, how="inner"
+                    )
+
+                    if merged.empty:
+                        mae = max_err = float("nan")
+                    else:
+                        diffs = (merged["pred_val"] - merged["actual_val"]).abs()
+                        mae = diffs.mean()
+                        max_err = diffs.max()
+
+                    pred_mean = merged["pred_val"].mean() if not merged.empty else float("nan")
+                    actual_mean = merged["actual_val"].mean() if not merged.empty else float("nan")
+
+                    records.append({
+                        "horizon_day": h,
+                        "forecast_date": target_date.strftime("%Y-%m-%d"),
+                        "predicted_mean": round(pred_mean, 2) if pd.notna(pred_mean) else "--",
+                        "actual_mean": round(actual_mean, 2) if pd.notna(actual_mean) else "--",
+                        "MAE": round(mae, 2) if pd.notna(mae) else "--",
+                        "max_abs_err": round(max_err, 2) if pd.notna(max_err) else "--",
+                    })
+
+                anchor_tbl = pd.DataFrame(records)
+                st.dataframe(anchor_tbl, use_container_width=True, key=f"anchor_{model_name}")
+
+                # ---- Plot predicted vs actual over 7-day horizon ----
+                try:
+                    plot_df = anchor_tbl.replace("--", np.nan).dropna(subset=["predicted_mean", "actual_mean"]).copy()
+                    plot_df["predicted_mean"] = pd.to_numeric(plot_df["predicted_mean"])
+                    plot_df["actual_mean"] = pd.to_numeric(plot_df["actual_mean"])
+                    if not plot_df.empty:
+                        fig_anchor = go.Figure()
+                        fig_anchor.add_trace(
+                            go.Scatter(
+                                x=plot_df["forecast_date"],
+                                y=plot_df["predicted_mean"],
+                                mode="lines+markers",
+                                name="Predicted",
+                            )
+                        )
+                        fig_anchor.add_trace(
+                            go.Scatter(
+                                x=plot_df["forecast_date"],
+                                y=plot_df["actual_mean"],
+                                mode="lines+markers",
+                                name="Actual",
+                            )
+                        )
+                        fig_anchor.update_layout(
+                            title="Anchor-day 7-Day Forecast vs Actual",
+                            xaxis_title="Date",
+                            yaxis_title="Temperature (°C)",
+                            xaxis=dict(tickformat="%Y-%m-%d"),
+                        )
+                        st.plotly_chart(fig_anchor, use_container_width=True, key=f"anchor_plot_{model_name}")
+                except Exception as exc:
+                    _d(f"Anchor plot error: {exc}")
 
     # ------------------ EXTREMES TAB ------------------
     with extremes_tab:
@@ -1494,8 +1609,9 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
         st.error(_t("Unable to access base data or model for forecasting."))
         return False
 
-    # Special handling if the model is *direct* multi-output and horizon <= 3
-    if isinstance(mdl, (MultiOutputRegressor, MultiLGBMRegressor)) and horizon <= 3:
+    # Special handling if the model is *direct* multi-output and the requested
+    # horizon fits within the model's native multi-output dimensions.
+    if isinstance(mdl, (MultiOutputRegressor, MultiLGBMRegressor)) and horizon <= HORIZON_DAYS:
         # 1. Take **last known row** per physical sensor as input snapshot
         sensors_key = [c for c in [
             "granary_id", "heap_id", "grid_x", "grid_y", "grid_z"
@@ -1510,12 +1626,14 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
 
         # Prepare design matrix
         X_snap, _ = features.select_feature_target_multi(
-            last_rows, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+            last_rows, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
         )
         model_feats = get_feature_cols(mdl, X_snap)
         X_snap_aligned = X_snap.reindex(columns=model_feats, fill_value=0)
 
         preds_mat = model_utils.predict(mdl, X_snap_aligned)  # shape (n, 3)
+
+        n_out = preds_mat.shape[1] if getattr(preds_mat, "ndim", 1) == 2 else 1
 
         # Build future frames for 1, 2, 3-day horizons ------------------
         all_future_frames: list[pd.DataFrame] = []
@@ -1523,11 +1641,18 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
 
         for h in range(1, horizon + 1):
             day_frame = last_rows.copy()
-            day_frame["detection_time"] = last_dt + pd.Timedelta(days=h)
+            day_frame["detection_time"] = last_dt + timedelta(days=h)
             day_frame["forecast_day"] = h
-            day_frame["predicted_temp"] = preds_mat[:, h - 1]
-            day_frame["temperature_grain"] = preds_mat[:, h - 1]
-            day_frame[TARGET_TEMP_COL] = preds_mat[:, h - 1]
+
+            idx = min(h - 1, n_out - 1)  # fallback to last available output
+            if getattr(preds_mat, "ndim", 1) == 2:
+                pred_val = preds_mat[:, idx]
+            else:
+                pred_val = preds_mat  # 1-D: same value for all horizons
+
+            day_frame["predicted_temp"] = pred_val
+            day_frame["temperature_grain"] = pred_val
+            day_frame[TARGET_TEMP_COL] = pred_val
             day_frame["is_forecast"] = True
             all_future_frames.append(day_frame)
 
@@ -1560,7 +1685,7 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
                     day_df[col] = pd.Categorical(day_df[col], categories=cats)
 
             X_day, _ = features.select_feature_target_multi(
-                day_df, target_col=TARGET_TEMP_COL, horizons=(1, 2, 3), allow_na=True
+                day_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
             )
             model_feats = get_feature_cols(mdl, X_day)
             X_day_aligned = X_day.reindex(columns=model_feats, fill_value=0)
@@ -1684,7 +1809,7 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     # -------------------------------------------------------------
     # 5️⃣ Multi-horizon targets (1–3 days ahead)
     # -------------------------------------------------------------
-    df = features.add_multi_horizon_targets(df, horizons=(1, 2, 3))  # NEW
+    df = features.add_multi_horizon_targets(df, horizons=HORIZON_TUPLE)  # NEW
     _d("add_multi_horizon_targets: future target columns added")
 
     return df
@@ -1914,6 +2039,33 @@ def split_train_last_n_days(df: pd.DataFrame, n_days: int = 30):
     df_train.drop(columns=["_date"], inplace=True)
     df_eval.drop(columns=["_date"], inplace=True)
     return df_train, df_eval
+
+
+# ---------------- NEW – evaluation sub-sampler --------------------
+
+def _subsample_every_k_days(df: pd.DataFrame, k: int = 3, *, date_col: str = "detection_time") -> pd.DataFrame:
+    """Return *df* where only one row every *k* days (by *date_col*) is kept.
+
+    This reduces overlap between successive multi-horizon predictions in the
+    evaluation split.  Rows belonging to dates that are not selected are
+    dropped entirely.  If *date_col* is missing or the frame is empty the
+    input is returned unchanged.
+    """
+    if df.empty or date_col not in df.columns:
+        return df
+
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df["_date_only"] = df[date_col].dt.date
+
+    unique_dates = sorted(df["_date_only"].unique())
+    if not unique_dates:
+        return df.drop(columns=["_date_only"], errors="ignore")
+
+    keep_dates = set(unique_dates[::k])  # every k-th day starting from first
+    df = df[df["_date_only"].isin(keep_dates)].copy()
+    df.drop(columns=["_date_only"], inplace=True)
+    return df
 
 
 if __name__ == "__main__":

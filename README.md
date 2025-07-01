@@ -55,7 +55,7 @@ The project started as *GranaryPredict* and was renamed in May-2025 – imports 
 ## Quick-Start (Windows / macOS / Linux)
 
 # 1. Clone & enter repo
-cmd: git clone -b v1 https://github.com/kaiyaunli7/siloflow.git
+cmd: git clone -b v1 https://github.com/kaiyuanli7/siloflow.git
 cmd: cd siloflow
 
 # 2. Create & activate a Python 3.11 virtual environment
