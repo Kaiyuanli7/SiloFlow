@@ -1246,12 +1246,33 @@ def render_evaluation(model_name: str):
         if "forecast_day" not in df_eval.columns:
             st.info("forecast_day column missing – cannot compute anchor forecast.")
         else:
-            anchor_rows = df_eval[df_eval["forecast_day"] == 1].copy()
+            # Build mapping from forecast_day -> calendar date (min date for that day)
+            day_date_pairs = []
+            for d_val in sorted(df_eval["forecast_day"].unique()):
+                d_date = (
+                    pd.to_datetime(df_eval[df_eval["forecast_day"] == d_val]["detection_time"])
+                    .dt.floor("D")
+                    .min()
+                )
+                if pd.notna(d_date):
+                    day_date_pairs.append((d_date.strftime("%Y-%m-%d"), d_val))
+
+            if not day_date_pairs:
+                st.info("No anchor dates available.")
+                return
+
+            date_options = [p[0] for p in day_date_pairs]
+            mapping_day = {p[0]: p[1] for p in day_date_pairs}
+
+            sel_date_str = st.selectbox("Select anchor date", options=date_options, index=0, key=f"anchor_sel_{model_name}")
+            sel_anchor = mapping_day[sel_date_str]
+
+            anchor_rows = df_eval[df_eval["forecast_day"] == sel_anchor].copy()
             if anchor_rows.empty:
-                st.info("No rows with forecast_day == 1 in evaluation set.")
+                st.info(f"No rows for selected anchor date {sel_date_str}.")
             else:
-                # Determine anchor calendar date
-                anchor_date = pd.to_datetime(anchor_rows["detection_time"]).dt.floor("D").iloc[0]
+                # Determine anchor calendar date from selection
+                anchor_date = pd.to_datetime(sel_date_str)
 
                 records = []
                 for h in HORIZON_TUPLE:
