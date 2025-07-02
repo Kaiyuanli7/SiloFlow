@@ -41,7 +41,9 @@ def create_time_features(
                 "Add the column or pass the correct name via the 'timestamp_col' argument."
             )
 
-    df[timestamp_col] = pd.to_datetime(df[timestamp_col])
+    # Robust conversion – coerce invalid strings to NaT so downstream code
+    # can decide how to handle them without crashing (May-2025 fix).
+    df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
 
     df["year"] = df[timestamp_col].dt.year
     df["month"] = df[timestamp_col].dt.month

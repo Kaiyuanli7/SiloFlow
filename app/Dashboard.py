@@ -414,8 +414,8 @@ def split_train_eval_frac(df: pd.DataFrame, test_frac: float = 0.2):
     proportion instead of fixed horizon.
     """
     df = df.copy()
-    df["_date"] = pd.to_datetime(df["detection_time"]).dt.date
-    unique_dates = sorted(df["_date"].unique())
+    df["_date"] = pd.to_datetime(df["detection_time"], errors="coerce").dt.date
+    unique_dates = sorted(df["_date"].dropna().unique())
     if not unique_dates:
         return df, pd.DataFrame()
 
@@ -1219,14 +1219,14 @@ def render_evaluation(model_name: str):
 
     with grid_tab:
         # Build list of unique dates present in evaluation subset only
-        unique_dates = sorted(pd.to_datetime(df_eval["detection_time"]).dt.floor("D").unique())
+        unique_dates = sorted(pd.to_datetime(df_eval["detection_time"], errors="coerce").dt.floor("D").unique())
         date_choice = st.selectbox(
             _t("Select date"),
             options=[d.strftime("%Y-%m-%d") for d in unique_dates],
             key=f"day_{model_name}_grid_{len(unique_dates)}",
         )
         sel_date = pd.to_datetime(date_choice)
-        df_predplot = df_predplot_all[pd.to_datetime(df_predplot_all["detection_time"]).dt.floor("D") == sel_date]
+        df_predplot = df_predplot_all[pd.to_datetime(df_predplot_all["detection_time"], errors="coerce").dt.floor("D") == sel_date]
         plot_3d_grid(
             df_predplot,
             key=f"grid_{model_name}_{date_choice}",
@@ -1353,6 +1353,44 @@ def render_evaluation(model_name: str):
                         st.plotly_chart(fig_anchor, use_container_width=True, key=f"anchor_plot_{model_name}")
                 except Exception as exc:
                     _d(f"Anchor plot error: {exc}")
+
+        # ---- Overall MAE across ALL anchor dates (aggregated) ----
+        mae_vals_global: list[float] = []
+        for anchor_val in sorted(df_eval["forecast_day"].unique()):
+            anchor_rows_all = df_eval[df_eval["forecast_day"] == anchor_val].copy()
+            if anchor_rows_all.empty:
+                continue
+            anchor_date_all = pd.to_datetime(anchor_rows_all["detection_time"]).dt.floor("D").min()
+            for h in HORIZON_TUPLE:
+                pred_col = f"pred_h{h}d"
+                if pred_col not in anchor_rows_all.columns:
+                    continue
+                pred_subset_all = anchor_rows_all.assign(pred_val=anchor_rows_all[pred_col])
+
+                target_date_all = anchor_date_all + pd.Timedelta(days=h)
+                act_subset_all = df_eval[pd.to_datetime(df_eval["detection_time"]).dt.floor("D") == target_date_all].copy()
+                act_subset_all = act_subset_all.assign(actual_val=act_subset_all[TARGET_TEMP_COL])
+
+                key_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in pred_subset_all.columns and c in act_subset_all.columns]
+                merged_all = pred_subset_all[key_cols + ["pred_val"]].merge(
+                    act_subset_all[key_cols + ["actual_val"]], on=key_cols, how="inner"
+                )
+
+                if not merged_all.empty:
+                    mae_val = (merged_all["pred_val"] - merged_all["actual_val"]).abs().mean()
+                    if pd.notna(mae_val):
+                        mae_vals_global.append(mae_val)
+
+        if mae_vals_global:
+            avg_mae_global = float(np.nanmean(mae_vals_global))
+            max_mae_global = float(np.nanmax(mae_vals_global))
+            st.markdown("---")
+            st.markdown("### Aggregate MAE Metrics Across All Anchors")
+            col_avg, col_max = st.columns(2)
+            with col_avg:
+                st.metric("Avg MAE (all anchors × 7 days)", f"{avg_mae_global:.2f}")
+            with col_max:
+                st.metric("Max MAE (all anchors × 7 days)", f"{max_mae_global:.2f}")
 
     # ------------------ EXTREMES TAB ------------------
     with extremes_tab:
@@ -1542,6 +1580,17 @@ def render_forecast(model_name: str):
         )
         st.subheader(_t("Forecast Summary (predicted)"))
         _st_dataframe_safe(grp, key=f"forecast_summary_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}")
+
+        # Offer download of raw predictions CSV if available
+        csv_path = forecast_data.get("csv_path")
+        if csv_path and pathlib.Path(csv_path).exists():
+            with open(csv_path, "rb") as _f:
+                st.download_button(
+                    label="Download predictions CSV",
+                    data=_f.read(),
+                    file_name=pathlib.Path(csv_path).name,
+                    mime="text/csv",
+                )
 
     with pred_tab:
         _st_dataframe_safe(future_df, key=f"future_pred_df_{model_name}_{len(future_df['forecast_day'].unique()) if 'forecast_day' in future_df.columns else 0}")
@@ -1741,6 +1790,39 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
         "X_future": X_day_aligned,  # last horizon step matrix for debug
     }
     _d(f"[FORECAST] Stored forecast – rows={len(future_df)}")
+
+    # ---------------- Persist predictions to CSV -----------------
+    try:
+        # Keep only essential columns for the user-facing CSV
+        core_cols = [
+            c for c in [
+                "granary_id",
+                "heap_id",
+                "grid_x",
+                "grid_y",
+                "grid_z",
+                "detection_time",
+                "forecast_day",
+                "predicted_temp",
+            ]
+            if c in future_df.columns
+        ]
+        out_df = future_df[core_cols].copy()
+
+        # Ensure output directory exists
+        out_dir = pathlib.Path("data/forecasts")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        csv_name = f"{pathlib.Path(model_name).stem}_forecast_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        csv_path = out_dir / csv_name
+        out_df.to_csv(csv_path, index=False, encoding="utf-8")
+
+        # Store path for UI download
+        st.session_state["forecasts"][model_name]["csv_path"] = str(csv_path)
+        _d(f"[FORECAST] CSV written to {csv_path}")
+    except Exception as exc:
+        _d(f"Could not write forecast CSV: {exc}")
+
     return True
 
 
@@ -1857,35 +1939,62 @@ def _insert_calendar_gaps(df: pd.DataFrame) -> pd.DataFrame:
     if "detection_time" not in df.columns:
         return df
 
+    # ------------------------------------------------------------------
+    # 1️⃣  Ensure *detection_time* is a valid datetime and drop completely
+    #     invalid rows (NaT).  Keeping them would break downstream logic
+    #     that expects real timestamps (e.g. pd.date_range).
+    # ------------------------------------------------------------------
     df = df.copy()
     df["detection_time"] = pd.to_datetime(df["detection_time"], errors="coerce")
 
-    group_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in df.columns]
+    # If every row is NaT we cannot infer timelines – abort early.
+    if df["detection_time"].isna().all():
+        return df
+
+    # Keep rows with *valid* timestamps only for the gap-filling routine.
+    df_valid = df[df["detection_time"].notna()].copy()
+
+    group_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in df_valid.columns]
     if not group_cols:
         group_cols = []  # treat whole frame as one group
 
-    frames = [df]
+    frames = [df_valid]
 
-    # Helper to decide which numeric cols are *measurements* (varying) vs static
-    static_like = set(group_cols + ["granary_id", "heap_id", "grain_type", "warehouse_type"])  # do not null
+    # Helper set – columns that should NOT be nulled when cloning template
+    static_like = set(group_cols + ["granary_id", "heap_id", "grain_type", "warehouse_type"])  # keep static
 
-    for key, sub in df.groupby(group_cols) if group_cols else [(None, df)]:
+    for key, sub in (df_valid.groupby(group_cols) if group_cols else [(None, df_valid)]):
         sub = sub.sort_values("detection_time")
-        date_floor = sub["detection_time"].dt.floor("D")
-        full_range = pd.date_range(date_floor.min(), date_floor.max(), freq="D")
-        missing_dates = sorted(set(full_range.date) - set(date_floor.dt.date.unique()))
-        if not missing_dates:
+
+        # Extract *valid* per-sensor date series
+        date_series = sub["detection_time"].dropna().dt.floor("D")
+        if date_series.empty:
+            # No valid dates in this group – skip safely
             continue
 
-        # Use last known row as template (static cols correct)
+        start_date, end_date = date_series.min(), date_series.max()
+        if pd.isna(start_date) or pd.isna(end_date):
+            # Should not happen after dropna but guard anyway
+            continue
+
+        if start_date == end_date:
+            # Single-day span – no calendar gaps possible
+            continue
+
+        full_range = pd.date_range(start_date, end_date, freq="D")
+        missing_dates = sorted(set(full_range.date) - set(date_series.dt.date.unique()))
+        if not missing_dates:
+            continue  # no gaps
+
+        # Use last known row (static cols correct) as template
         template = sub.iloc[-1].copy()
 
         new_rows = []
         for md in missing_dates:
             row = template.copy()
             row["detection_time"] = pd.Timestamp(md)
-            # Null out non-static numeric columns to be filled later
-            for col in df.select_dtypes(include=[np.number]).columns:
+            # Null out dynamic numeric columns so they can be interpolated later
+            for col in df_valid.select_dtypes(include=[np.number]).columns:
                 if col not in static_like:
                     row[col] = np.nan
             new_rows.append(row)
@@ -1894,6 +2003,13 @@ def _insert_calendar_gaps(df: pd.DataFrame) -> pd.DataFrame:
             frames.append(pd.DataFrame(new_rows))
 
     df_full = pd.concat(frames, ignore_index=True)
+
+    # Append any rows that had invalid timestamps back (unchanged) so the
+    # output dataframe preserves all original data without breaking the
+    # timeline-based computations.
+    if df["detection_time"].isna().any():
+        df_full = pd.concat([df_full, df[df["detection_time"].isna()]], ignore_index=True)
+
     return df_full
 
 
@@ -2048,7 +2164,7 @@ def split_train_last_n_days(df: pd.DataFrame, n_days: int = 30):
     df = df.copy()
     df["_date"] = pd.to_datetime(df["detection_time"]).dt.date
 
-    unique_dates = sorted(df["_date"].unique())
+    unique_dates = sorted(df["_date"].dropna().unique())
     if not unique_dates:
         return df, pd.DataFrame()
 

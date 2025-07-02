@@ -126,7 +126,7 @@ def standardize_result147(df: pd.DataFrame) -> pd.DataFrame:
     }
     df = df.rename(columns=mapping)
     # ensure correct dtypes
-    df["detection_time"] = pd.to_datetime(df["detection_time"])
+    df["detection_time"] = pd.to_datetime(df["detection_time"], errors="coerce")
     nums = [
         "temperature_grain",
         "temperature_inside",
