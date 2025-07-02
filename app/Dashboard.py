@@ -234,7 +234,12 @@ def load_trained_model(path: Optional[str | pathlib.Path] = None):
             path = preload_path
 
     if path.exists():
-        return model_utils.load_model(path)
+        try:
+            return model_utils.load_model(path)
+        except (FileNotFoundError, ValueError) as exc:
+            # Show the issue to the user but keep the app running gracefully
+            st.error(str(exc))
+            return None
 
     st.warning(_t("Model not found – please train or select another."))
     return None

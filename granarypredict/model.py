@@ -135,16 +135,53 @@ def train_lightgbm(
 
 
 def save_model(model: Any, name: str = "rf_model.joblib") -> Path:
-    path = MODELS_DIR / name
-    joblib.dump(model, path)
-    logger.info("Saved model to %s", path)
-    return path
+    """Persist *model* inside the project‐scoped ``models`` directory.
+
+    The helper now guards against path traversal – *name* must resolve **within**
+    ``MODELS_DIR``.  Any attempt to escape this directory (e.g. passing
+    "../other/app.joblib") will raise ``ValueError``.
+    """
+
+    # Resolve destination path *strictly* under MODELS_DIR
+    candidate = (MODELS_DIR / name).resolve()
+    try:
+        candidate.relative_to(MODELS_DIR.resolve())  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise ValueError(f"Model save path outside permitted directory: {candidate}") from exc
+
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, candidate)
+    logger.info("Saved model to %s", candidate)
+    return candidate
 
 
 def load_model(path: str | Path) -> Any:
-    path = Path(path)
-    model = joblib.load(path)
-    logger.info("Loaded model from %s", path)
+    """Load a model artefact residing **only** inside ``MODELS_DIR``.
+
+    The function accepts either an absolute or relative path/filename.  If a
+    relative path is supplied, it is interpreted with respect to
+    ``MODELS_DIR``.  Absolute paths are allowed *only* when they already lie
+    within the models directory hierarchy; otherwise a ``ValueError`` is
+    raised to prevent accidental access outside the project sandbox.
+    """
+
+    p = Path(path)
+
+    # Convert to absolute path anchored at MODELS_DIR when necessary
+    if not p.is_absolute():
+        p = (MODELS_DIR / p).resolve()
+
+    # Verify the resolved path stays within MODELS_DIR
+    try:
+        p.relative_to(MODELS_DIR.resolve())  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise ValueError(f"Refusing to load model outside models directory: {p}") from exc
+
+    if not p.exists():
+        raise FileNotFoundError(f"Model file not found: {p}")
+
+    model = joblib.load(p)
+    logger.info("Loaded model from %s", p)
     return model
 
 
