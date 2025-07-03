@@ -117,11 +117,20 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "MAE h+2": "MAE h+2",
     "MAE h+3": "MAE h+3",
     "RMSE h+1": "RMSE h+1",
+    "RMSE h+2": "RMSE h+2",
+    "RMSE h+3": "RMSE h+3",
+    "MAPE h+1": "MAPE h+1",
     "Confidence (%)": "置信度 (%)",
     "Accuracy (%)": "准确率 (%)",
     "RMSE": "RMSE",
     "MAE": "MAE",
     "MAPE (%)": "MAPE (%)",
+    "Forecast horizon (h + ? days)": "预测范围 (h + ? 天)",
+    "MAE per horizon": "各预测期 MAE",
+    "RMSE per horizon": "各预测期 RMSE",
+    "MAPE per horizon": "各预测期 MAPE",
+    "Row-wise horizon metrics (above) average the error of each h-day-ahead prediction across all evaluation rows.\nFor a real-world, bulletin-style view of performance, switch to the 'Anchor 7-day' tab, where metrics are computed by freezing predictions on an anchor day and comparing them with observations that occur h days later.": "上方按预测期汇总的指标是对评估集每一行的 h 日预测误差取平均。\n若想查看更贴近实际业务的表现，请切换到 \"Anchor 7-day\" 页签：在那里，指标在锚定日冻结预测，再与 h 天后的真实温度比较",
+    "Anchor metrics emulate operational use: predictions are frozen on the selected anchor day (forecast_day = 1) and each horizon h is scored against the real temperature measured h days later.\nThis gives the most realistic estimate of future-forecast performance.": "Anchor 指标模拟实际操作流程：在锚定日（forecast_day = 1）冻结预测，并在 h 天后用真实观测温度打分。\n这能提供对未来预测性能的最真实估计。",
 }
 
 
@@ -305,16 +314,44 @@ def plot_3d_grid(df: pd.DataFrame, *, key: str, color_by_delta: bool = False):
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
-def plot_time_series(df: pd.DataFrame, *, key: str):
-    if "predicted_temp" not in df.columns or "detection_time" not in df.columns:
+def plot_time_series(
+    df: pd.DataFrame,
+    *,
+    key: str,
+    horizon_day: int = 1,
+):
+    """Plot actual vs predicted *average* grain temperature.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Concatenated dataframe that may contain historic rows, evaluation rows
+        and/or future forecast rows.
+    key : str
+        Streamlit component key.
+    horizon_day : int, default ``1``
+        Forecast horizon to visualise (1-7).  ``1`` corresponds to the legacy
+        behaviour that uses the *predicted_temp* column.  For *horizon_day > 1*
+        the function looks for a column called ``pred_h{horizon_day}d``.
+    """
+
+    if "detection_time" not in df.columns:
+        return  # nothing to plot
+
+    # Determine which prediction column to use --------------------------
+    pred_col = "predicted_temp" if horizon_day == 1 else f"pred_h{horizon_day}d"
+    if pred_col not in df.columns:
+        # Gracefully exit if the requested horizon is unavailable
+        st.info(f"Prediction column '{pred_col}' not found – unable to draw time-series for h+{horizon_day}.")
         return
+
     tmp = df.copy()
     # Use floor("D") to keep datetime64 dtype; avoids Plotly treating axis as categorical
     tmp["date"] = pd.to_datetime(tmp["detection_time"]).dt.floor("D")
 
     fig = go.Figure()
 
-    # -------- Actual line --------
+    # -------- Actual line ---------------------------------------------
     grp_actual = tmp.groupby("date").agg(actual=(TARGET_TEMP_COL, "mean")).reset_index()
     fig.add_trace(
         go.Scatter(
@@ -326,49 +363,48 @@ def plot_time_series(df: pd.DataFrame, *, key: str):
         )
     )
 
-    # ------- Predicted line (continuous across eval & filled) -------
-    if "predicted_temp" in tmp.columns:
-        grp_pred = (
-            tmp.groupby("date").agg(predicted=("predicted_temp", "mean")).reset_index().sort_values("date")
+    # ------- Predicted line (continuous across eval + future) ----------
+    grp_pred = (
+        tmp.groupby("date").agg(predicted=(pred_col, "mean")).reset_index().sort_values("date")
+    )
+
+    # Determine cutoff between evaluation (has actual data) and future-only predictions
+    actual_mask = tmp[TARGET_TEMP_COL].notna()
+    last_actual_date = tmp.loc[actual_mask, "date"].max()
+
+    if pd.isna(last_actual_date):
+        pred_eval = pd.DataFrame()
+        pred_future = grp_pred
+    else:
+        pred_eval = grp_pred[grp_pred["date"] <= last_actual_date]
+        pred_future = grp_pred[grp_pred["date"] > last_actual_date]
+
+    if not pred_eval.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=pred_eval["date"],
+                y=pred_eval["predicted"],
+                mode="lines+markers",
+                name=f"Predicted h+{horizon_day} (eval)",
+                line=dict(color="#ff7f0e"),
+                connectgaps=True,
+            )
         )
 
-        # Determine cutoff between evaluation (has actual data) and future-only predictions
-        actual_mask = tmp[TARGET_TEMP_COL].notna()
-        last_actual_date = tmp.loc[actual_mask, "date"].max()
-
-        if pd.isna(last_actual_date):
-            pred_eval = pd.DataFrame()
-            pred_future = grp_pred
-        else:
-            pred_eval = grp_pred[grp_pred["date"] <= last_actual_date]
-            pred_future = grp_pred[grp_pred["date"] > last_actual_date]
-
-        if not pred_eval.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=pred_eval["date"],
-                    y=pred_eval["predicted"],
-                    mode="lines+markers",
-                    name="Predicted (eval)",
-                    line=dict(color="#ff7f0e"),
-                    connectgaps=True,
-                )
+    if not pred_future.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=pred_future["date"],
+                y=pred_future["predicted"],
+                mode="lines+markers",
+                name=f"Predicted h+{horizon_day} (future)",
+                line=dict(color="#9467bd"),
+                connectgaps=True,
             )
-
-        if not pred_future.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=pred_future["date"],
-                    y=pred_future["predicted"],
-                    mode="lines+markers",
-                    name="Predicted (future)",
-                    line=dict(color="#9467bd"),
-                    connectgaps=True,
-                )
-            )
+        )
 
     fig.update_layout(
-        title="Average Grain Temperature Over Time",
+        title=f"Average Grain Temperature – h+{horizon_day}",
         xaxis_title="Date",
         yaxis_title="Temperature (°C)",
         xaxis=dict(rangeslider=dict(visible=True)),
@@ -438,11 +474,19 @@ def forecast_summary(df_eval: pd.DataFrame) -> pd.DataFrame:
     if "forecast_day" not in df_eval.columns:
         return pd.DataFrame()
 
+    # Pre-compute per-row absolute and squared errors to speed up group aggregations
+    df_eval = df_eval.copy()
+    if {TARGET_TEMP_COL, "predicted_temp"}.issubset(df_eval.columns):
+        df_eval["abs_err"] = (df_eval[TARGET_TEMP_COL] - df_eval["predicted_temp"]).abs()
+        df_eval["sqr_err"] = (df_eval[TARGET_TEMP_COL] - df_eval["predicted_temp"]) ** 2
+
     grp = (
         df_eval.groupby("forecast_day")
         .agg(
             actual_mean=(TARGET_TEMP_COL, "mean"),
             pred_mean=("predicted_temp", "mean"),
+            mae=("abs_err", "mean"),
+            rmse=("sqr_err", lambda s: np.sqrt(np.nanmean(s))),
         )
         .reset_index()
     )
@@ -454,7 +498,7 @@ def forecast_summary(df_eval: pd.DataFrame) -> pd.DataFrame:
         )
         grp["date"] = grp["forecast_day"].map(day_to_date)
         # Re-order so date is the first column and drop forecast_day numeric index
-        grp = grp[["date", "actual_mean", "pred_mean"]]
+        grp = grp[["date", "actual_mean", "pred_mean", "mae", "rmse"]]
         grp = grp.rename(columns={"date": "calendar_date"})
     
     # Percent absolute error (only where actual_mean is finite & non-zero)
@@ -665,6 +709,11 @@ def main():
             if model_choice == "LightGBM":
                 st.caption(_t("LightGBM uses early stopping; optimal number of trees will be selected automatically."))
                 n_trees = 2000  # upper bound (not shown to user)
+                tune_optuna = st.checkbox("Optuna hyper-parameter search", value=False, help="Run Optuna to tune LightGBM parameters before final training")
+                if tune_optuna:
+                    n_trials = st.slider("Optuna trials", 20, 200, 50, step=10)
+                else:
+                    n_trials = 0
             else:
                 n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
             future_safe = st.checkbox(_t("Future-safe (exclude env vars)"), value=True)
@@ -761,14 +810,52 @@ def main():
                     use_wrapper = True
                     _d(f"[MODEL] HistGradientBoosting initialised max_iter={n_trees}")
                 else:  # LightGBM with early stopping
+                    # Default starting parameters
                     base_params = dict(
-                        learning_rate=0.03347500352712116,
+                        learning_rate=0.033,
                         max_depth=7,
-                        num_leaves=24,
-                        subsample=0.8832753633141975,
-                        colsample_bytree=0.6292206613991069,
-                        min_child_samples=44,
+                        num_leaves=31,
+                        subsample=0.9,
+                        colsample_bytree=0.7,
+                        min_child_samples=20,
                     )
+
+                    # --------- Optional Optuna tuning ------------------------
+                    if 'tune_optuna' in locals() and tune_optuna:
+                        try:
+                            import optuna
+
+                            def objective(trial):
+                                params = {
+                                    "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+                                    "max_depth": trial.suggest_int("max_depth", 3, 10),
+                                    "num_leaves": trial.suggest_int("num_leaves", 16, 64),
+                                    "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+                                    "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 1.0),
+                                    "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+                                }
+
+                                mdl_tmp = MultiLGBMRegressor(
+                                    base_params=params,
+                                    upper_bound_estimators=n_trees,
+                                    early_stopping_rounds=100,
+                                )
+                                mdl_tmp.fit(X_tr, y_tr, eval_set=(X_te, y_te), verbose=False)
+                                preds_tmp = mdl_tmp.predict(X_te)
+                                mae_tmp = mean_absolute_error(y_te, preds_tmp)
+                                # Notify user in real-time
+                                import streamlit as _st
+                                _st.toast(f"Optuna trial {trial.number}: MAE {mae_tmp:.4f}")
+                                _d(f"[OPTUNA] Trial {trial.number} – MAE {mae_tmp:.4f}")
+                                return mae_tmp
+
+                            study = optuna.create_study(direction="minimize")
+                            study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+                            base_params = study.best_params
+                            _d(f"[OPTUNA] Best params: {base_params}")
+                        except Exception as exc:
+                            _d(f"[OPTUNA] Tuning failed or Optuna not installed: {exc}")
+
                     base_mdl = MultiLGBMRegressor(
                         base_params=base_params,
                         upper_bound_estimators=n_trees,
@@ -972,11 +1059,23 @@ def main():
                             mape_c = (err.abs() / df_eval_actual.loc[mask, TARGET_TEMP_COL]).mean() * 100
                             return mae_c, rmse_c, mape_c
 
-                        mae_h1, rmse_h1, mape_h1 = _metric("pred_h1d")
-                        mae_h2, rmse_h2, mape_h2 = _metric("pred_h2d") if "pred_h2d" in df_eval_actual.columns else (float("nan"),)*3
-                        mae_h3, rmse_h3, mape_h3 = _metric("pred_h3d") if "pred_h3d" in df_eval_actual.columns else (float("nan"),)*3
+                        # ---- Compute metrics for **all** horizons up to HORIZON_DAYS ----
+                        mae_by_h, rmse_by_h, mape_by_h = {}, {}, {}
+                        for h in HORIZON_TUPLE:
+                            col_name = f"pred_h{h}d"
+                            if col_name in df_eval_actual.columns:
+                                mae_v, rmse_v, mape_v = _metric(col_name)
+                            else:
+                                mae_v = rmse_v = mape_v = float("nan")
+                            mae_by_h[h] = mae_v
+                            rmse_by_h[h] = rmse_v
+                            mape_by_h[h] = mape_v
 
-                        # Retain legacy overall MAE/RMSE as horizon 1
+                        # For backward‐compatibility, keep first horizon values
+                        mae_h1 = mae_by_h.get(1, float("nan"))
+                        rmse_h1 = rmse_by_h.get(1, float("nan"))
+                        mape_h1 = mape_by_h.get(1, float("nan"))
+
                         mae = mae_h1
                         rmse = rmse_h1
                         mape = mape_h1
@@ -1014,11 +1113,11 @@ def main():
                             "mae": mae,
                             "mape": mape,
                             "mae_h1": mae_h1,
-                            "mae_h2": mae_h2,
-                            "mae_h3": mae_h3,
+                            "mae_h2": mae_by_h.get(2, float("nan")),
+                            "mae_h3": mae_by_h.get(3, float("nan")),
                             "rmse_h1": rmse_h1,
-                            "rmse_h2": rmse_h2,
-                            "rmse_h3": rmse_h3,
+                            "rmse_h2": rmse_by_h.get(2, float("nan")),
+                            "rmse_h3": rmse_by_h.get(3, float("nan")),
                             "feature_cols": feature_cols_mdl,
                             "feature_importance": fi_df,
                             "categories_map": categories_map,
@@ -1029,6 +1128,9 @@ def main():
                             # NEW debug matrices
                             "X_train": X_train_aligned,
                             "X_eval": X_eval_aligned,
+                            "mae_by_h": mae_by_h,
+                            "rmse_by_h": rmse_by_h,
+                            "mape_by_h": mape_by_h,
                         }
 
                     # last evaluated model as active
@@ -1163,27 +1265,49 @@ def render_evaluation(model_name: str):
     else:
         rmse_val = mae_val = mape_val = float("nan")
 
-    # Per-horizon metrics table
-    mae_h1 = res.get("mae_h1", float("nan"))
-    mae_h2 = res.get("mae_h2", float("nan"))
-    mae_h3 = res.get("mae_h3", float("nan"))
-    rmse_h1 = res.get("rmse_h1", float("nan"))
-    rmse_h2 = res.get("rmse_h2", float("nan"))
-    rmse_h3 = res.get("rmse_h3", float("nan"))
+    # Per-horizon metrics up to HORIZON_DAYS
+    mae_by_h = res.get("mae_by_h", {})
+    rmse_by_h = res.get("rmse_by_h", {})
+    mape_by_h = res.get("mape_by_h", {})
 
-    metric_cols = st.columns(6)
-    with metric_cols[0]:
+    # ---- Overview row (conf / acc) -----------------------------------
+    overview_cols = st.columns(2)
+    with overview_cols[0]:
         st.metric(_t("Conf (%)"), "--" if pd.isna(conf_val) else f"{conf_val:.2f}")
-    with metric_cols[1]:
+    with overview_cols[1]:
         st.metric(_t("Acc (%)"), "--" if pd.isna(acc_val) else f"{acc_val:.2f}")
-    with metric_cols[2]:
-        st.metric(_t("MAE h+1"), "--" if pd.isna(mae_h1) else f"{mae_h1:.2f}")
-    with metric_cols[3]:
-        st.metric(_t("MAE h+2"), "--" if pd.isna(mae_h2) else f"{mae_h2:.2f}")
-    with metric_cols[4]:
-        st.metric(_t("MAE h+3"), "--" if pd.isna(mae_h3) else f"{mae_h3:.2f}")
-    with metric_cols[5]:
-        st.metric(_t("RMSE h+1"), "--" if pd.isna(rmse_h1) else f"{rmse_h1:.2f}")
+
+    # ---- MAE per horizon ---------------------------------------------
+    st.markdown(f"#### {_t('MAE per horizon')}")
+    cols_mae = st.columns(len(HORIZON_TUPLE))
+    for idx, h in enumerate(HORIZON_TUPLE):
+        v = mae_by_h.get(h, float("nan"))
+        with cols_mae[idx]:
+            st.metric(f"MAE h+{h}", "--" if pd.isna(v) else f"{v:.2f}")
+
+    # ---- RMSE per horizon --------------------------------------------
+    st.markdown(f"#### {_t('RMSE per horizon')}")
+    cols_rmse = st.columns(len(HORIZON_TUPLE))
+    for idx, h in enumerate(HORIZON_TUPLE):
+        v = rmse_by_h.get(h, float("nan"))
+        with cols_rmse[idx]:
+            st.metric(f"RMSE h+{h}", "--" if pd.isna(v) else f"{v:.2f}")
+
+    # ---- MAPE per horizon (optional) ----------------------------------
+    st.markdown(f"#### {_t('MAPE per horizon')}")
+    cols_mape = st.columns(len(HORIZON_TUPLE))
+    for idx, h in enumerate(HORIZON_TUPLE):
+        v = mape_by_h.get(h, float("nan"))
+        with cols_mape[idx]:
+            st.metric(f"MAPE h+{h}", "--" if pd.isna(v) else f"{v:.2f}")
+
+    # ---------------- Explanation caption -----------------------------
+    st.caption(
+        _t(
+            "Row-wise horizon metrics (above) average the error of each h-day-ahead prediction across all evaluation rows.\n"
+            "For a real-world, bulletin-style view of performance, switch to the 'Anchor 7-day' tab, where metrics are computed by freezing predictions on an anchor day and comparing them with observations that occur h days later."
+        )
+    )
 
     st.markdown("---")
 
@@ -1234,6 +1358,15 @@ def render_evaluation(model_name: str):
         )
 
     with ts_tab:
+        # ---------------- Horizon selector -----------------------
+        horizon_opts = list(range(1, HORIZON_DAYS + 1))
+        sel_horizon = st.selectbox(
+            _t("Forecast horizon (h + ? days)"),
+            options=horizon_opts,
+            index=0,
+            key=f"ts_horizon_{model_name}",
+        )
+
         # Merge past (training+eval) with future predictions so the trend is continuous
         hist_df = res.get("df_predplot_all")
         if hist_df is None:
@@ -1241,12 +1374,22 @@ def render_evaluation(model_name: str):
         combined_df = pd.concat([hist_df, df_eval], ignore_index=True, sort=False)
         plot_time_series(
             combined_df,
-            key=f"time_{model_name}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}",
+            key=f"time_{model_name}_{sel_horizon}_{len(df_eval['forecast_day'].unique()) if 'forecast_day' in df_eval.columns else 0}",
+            horizon_day=sel_horizon,
         )
 
     # -------------- ANCHOR 7-DAY TAB -------------------
     with anchor_tab:
         st.subheader("7-Day Forecast from Anchor Day (forecast_day=1)")
+
+        # Add explanatory caption once at top of tab
+        st.caption(
+            _t(
+                "Anchor metrics emulate operational use: predictions are frozen on the selected anchor day (forecast_day = 1) "
+                "and each horizon h is scored against the real temperature measured h days later.\n"
+                "This gives the most realistic estimate of future-forecast performance."
+            )
+        )
 
         if "forecast_day" not in df_eval.columns:
             st.info("forecast_day column missing – cannot compute anchor forecast.")
@@ -1391,6 +1534,69 @@ def render_evaluation(model_name: str):
                 st.metric("Avg MAE (all anchors × 7 days)", f"{avg_mae_global:.2f}")
             with col_max:
                 st.metric("Max MAE (all anchors × 7 days)", f"{max_mae_global:.2f}")
+
+            # -------- Per-horizon aggregate MAE -----------------------
+            mae_by_h: dict[int, list[float]] = {h: [] for h in HORIZON_TUPLE}
+            maxerr_by_h: dict[int, list[float]] = {h: [] for h in HORIZON_TUPLE}
+
+            for anchor_val in sorted(df_eval["forecast_day"].unique()):
+                anchor_rows_all = df_eval[df_eval["forecast_day"] == anchor_val].copy()
+                if anchor_rows_all.empty:
+                    continue
+                anchor_date_all = pd.to_datetime(anchor_rows_all["detection_time"]).dt.floor("D").min()
+
+                for h in HORIZON_TUPLE:
+                    pred_col = f"pred_h{h}d"
+                    if pred_col not in anchor_rows_all.columns:
+                        continue
+
+                    pred_subset_all = anchor_rows_all.assign(pred_val=anchor_rows_all[pred_col])
+                    target_date_all = anchor_date_all + pd.Timedelta(days=h)
+
+                    act_subset_all = df_eval[
+                        pd.to_datetime(df_eval["detection_time"]).dt.floor("D") == target_date_all
+                    ].copy()
+                    act_subset_all = act_subset_all.assign(actual_val=act_subset_all[TARGET_TEMP_COL])
+
+                    key_cols = [
+                        c
+                        for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"]
+                        if c in pred_subset_all.columns and c in act_subset_all.columns
+                    ]
+
+                    merged_all = pred_subset_all[key_cols + ["pred_val"]].merge(
+                        act_subset_all[key_cols + ["actual_val"]], on=key_cols, how="inner"
+                    )
+
+                    if not merged_all.empty:
+                        diffs = (merged_all["pred_val"] - merged_all["actual_val"]).abs()
+                        mae_val = diffs.mean()
+                        max_val = diffs.max()
+                        if pd.notna(mae_val):
+                            mae_by_h[h].append(mae_val)
+                        if pd.notna(max_val):
+                            maxerr_by_h[h].append(max_val)
+
+            # Display horizon-wise MAE metrics if any values present
+            any_vals = any(len(v) > 0 for v in mae_by_h.values())
+            if any_vals:
+                st.markdown("### MAE by Forecast Horizon (All Anchors)")
+                cols_h = st.columns(len(HORIZON_TUPLE))
+                for idx, h in enumerate(HORIZON_TUPLE):
+                    vals = mae_by_h[h]
+                    mae_h = np.nan if not vals else float(np.nanmean(vals))
+                    with cols_h[idx]:
+                        lbl = f"h+{h} MAE"
+                        st.metric(lbl, "--" if pd.isna(mae_h) else f"{mae_h:.2f}")
+
+                # ---------- Max absolute error per horizon -------------
+                cols_maxh = st.columns(len(HORIZON_TUPLE))
+                for idx, h in enumerate(HORIZON_TUPLE):
+                    vals = maxerr_by_h[h]
+                    max_h = np.nan if not vals else float(np.nanmax(vals))
+                    with cols_maxh[idx]:
+                        lbl = f"h+{h} Max |Error|"
+                        st.metric(lbl, "--" if pd.isna(max_h) else f"{max_h:.2f}")
 
     # ------------------ EXTREMES TAB ------------------
     with extremes_tab:
