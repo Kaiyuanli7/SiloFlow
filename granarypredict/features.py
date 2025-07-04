@@ -55,6 +55,28 @@ def create_time_features(
     df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
+
+    # -------- New calendar encodings (Jun-2025) ---------------------------
+    # Day-of-year & week-of-year cyclic features help seasonal patterns.
+    df["doy"] = df[timestamp_col].dt.dayofyear
+    df["weekofyear"] = df[timestamp_col].dt.isocalendar().week.astype(int)
+
+    df["doy_sin"] = np.sin(2 * np.pi * df["doy"] / 365)
+    df["doy_cos"] = np.cos(2 * np.pi * df["doy"] / 365)
+    df["woy_sin"] = np.sin(2 * np.pi * df["weekofyear"] / 52)
+    df["woy_cos"] = np.cos(2 * np.pi * df["weekofyear"] / 52)
+
+    # Weekend indicator (Saturday/Sunday = 1 else 0)
+    df["is_weekend"] = df[timestamp_col].dt.dayofweek >= 5
+
+    # Holiday flag (requires the 'holidays' package; falls back to False)
+    try:
+        import holidays  # noqa: WPS433
+
+        cn_holidays = holidays.country_holidays("CN")  # Chinese public holidays
+        df["is_holiday"] = df[timestamp_col].dt.date.astype(object).isin(cn_holidays)
+    except Exception:
+        df["is_holiday"] = False
     return df
 
 

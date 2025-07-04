@@ -27,6 +27,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
 from lightgbm import LGBMRegressor
 from sklearn.multioutput import MultiOutputRegressor  # NEW
+from sklearn.model_selection import GroupKFold
 
 # ---------------------------------------------------------------------
 # 🈯️  Simple i18n helper  (EN / 中文)  -----------------------------------
@@ -587,7 +588,6 @@ def make_future(df: pd.DataFrame, horizon_days: int) -> pd.DataFrame:
     # Feature engineering to match training pipeline
     future_df = features.create_time_features(future_df)
     future_df = features.create_spatial_features(future_df)
-    future_df = features.add_sensor_lag(future_df)
     # Ensure both legacy and new target columns exist so downstream feature
     # selection works regardless of current configuration.
     if "temperature_grain" not in future_df.columns:
@@ -706,14 +706,18 @@ def main():
                 ["RandomForest", "HistGradientBoosting", "LightGBM"],
                 index=0,
             )
+            # Initialize LightGBM-specific variables outside conditional
+            tune_optuna = False
+            use_quantile = False
+            n_trials = 0
+            
             if model_choice == "LightGBM":
                 st.caption(_t("LightGBM uses early stopping; optimal number of trees will be selected automatically."))
                 n_trees = 2000  # upper bound (not shown to user)
                 tune_optuna = st.checkbox("Optuna hyper-parameter search", value=False, help="Run Optuna to tune LightGBM parameters before final training")
+                use_quantile = st.checkbox("Quantile median objective", value=True, help="Train with LightGBM quantile (alpha 0.5) objective for lower MAE")
                 if tune_optuna:
                     n_trials = st.slider("Optuna trials", 20, 200, 50, step=10)
-                else:
-                    n_trials = 0
             else:
                 n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
             future_safe = st.checkbox(_t("Future-safe (exclude env vars)"), value=True)
@@ -820,39 +824,167 @@ def main():
                         min_child_samples=20,
                     )
 
+                    # Apply quantile objective if selected
+                    if use_quantile:
+                        base_params.update({
+                            "objective": "quantile",
+                            "alpha": 0.5,
+                        })
+
                     # --------- Optional Optuna tuning ------------------------
-                    if 'tune_optuna' in locals() and tune_optuna:
+                    if tune_optuna:
                         try:
                             import optuna
 
+                            # --------------------------------------------------
+                            # Determine optimisation split
+                            # --------------------------------------------------
+                            if X_te.empty:
+                                # 100 % training selected ➜ create internal 95/5 split
+                                _d("[OPTUNA] Creating internal 95/5 split for tuning (100% train mode)")
+                                _opt_tr_df, _opt_val_df = split_train_eval_frac(df, test_frac=0.05)
+                                X_opt_tr, y_opt_tr = features.select_feature_target_multi(
+                                    _opt_tr_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
+                                )
+                                X_opt_val, y_opt_val = features.select_feature_target_multi(
+                                    _opt_val_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
+                                )
+                            else:
+                                X_opt_tr, y_opt_tr, X_opt_val, y_opt_val = X_tr, y_tr, X_te, y_te
+
+                            # ------------------------------------------------------------------
+                            # Optuna objective using GroupKFold by calendar-week and MAE metric
+                            # ------------------------------------------------------------------
+
+                            # Create grouping by ISO calendar week to avoid leakage within the same week
+                            if X_te.empty:
+                                # We created internal split, use _opt_tr_df
+                                _grp_src_df = _opt_tr_df.copy()
+                            else:
+                                # Using external validation, use original df rows
+                                _grp_src_df = df.loc[X_opt_tr.index].copy()
+                            
+                            _grp_src_df["_week"] = pd.to_datetime(_grp_src_df["detection_time"], errors="coerce").dt.isocalendar().week
+                            groups_arr = _grp_src_df.loc[X_opt_tr.index, "_week"].to_numpy()
+
                             def objective(trial):
                                 params = {
-                                    "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+                                    "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.15, log=True),
                                     "max_depth": trial.suggest_int("max_depth", 3, 10),
-                                    "num_leaves": trial.suggest_int("num_leaves", 16, 64),
+                                    "num_leaves": trial.suggest_int("num_leaves", 16, 128),
                                     "subsample": trial.suggest_float("subsample", 0.5, 1.0),
                                     "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 1.0),
-                                    "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+                                    "min_child_samples": trial.suggest_int("min_child_samples", 5, 300),
+                                    "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 2.0),
+                                    "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 2.0),
                                 }
+                                
+                                # Apply quantile objective if selected
+                                if use_quantile:
+                                    params.update({
+                                        "objective": "quantile",
+                                        "alpha": 0.5,
+                                    })
 
-                                mdl_tmp = MultiLGBMRegressor(
-                                    base_params=params,
-                                    upper_bound_estimators=n_trees,
-                                    early_stopping_rounds=100,
-                                )
-                                mdl_tmp.fit(X_tr, y_tr, eval_set=(X_te, y_te), verbose=False)
-                                preds_tmp = mdl_tmp.predict(X_te)
-                                mae_tmp = mean_absolute_error(y_te, preds_tmp)
+                                # ========================================================
+                                # ANCHOR-DAY PERFORMANCE OPTIMIZATION
+                                # ========================================================
+                                # Instead of generic MAE, optimize for continuous 7-day 
+                                # forecast performance using anchor-day methodology
+                                
+                                kf = GroupKFold(n_splits=3)  # Reduced splits for anchor evaluation
+                                fold_anchor_maes = []
+                                
+                                for train_idx, val_idx in kf.split(X_opt_tr, y_opt_tr, groups=groups_arr):
+                                    X_tr_fold = X_opt_tr.iloc[train_idx]
+                                    y_tr_fold = y_opt_tr.iloc[train_idx]
+                                    X_val_fold = X_opt_tr.iloc[val_idx]
+                                    y_val_fold = y_opt_tr.iloc[val_idx]
+
+                                    mdl_tmp = MultiLGBMRegressor(
+                                        base_params=params,
+                                        upper_bound_estimators=n_trees,
+                                        early_stopping_rounds=100,
+                                    )
+                                    mdl_tmp.fit(X_tr_fold, y_tr_fold, eval_set=(X_val_fold, y_val_fold), verbose=False)
+                                    
+                                    # Generate anchor-day evaluation on this fold
+                                    try:
+                                        # Get the dataframe subset for this validation fold
+                                        val_df_fold = df.loc[X_val_fold.index].copy()
+                                        
+                                        # Generate predictions for all horizons
+                                        preds_tmp = mdl_tmp.predict(X_val_fold)
+                                        
+                                        # Attach multi-horizon predictions to validation dataframe
+                                        for idx, h in enumerate(HORIZON_TUPLE):
+                                            if idx < preds_tmp.shape[1]:
+                                                val_df_fold.loc[X_val_fold.index, f"pred_h{h}d"] = preds_tmp[:, idx]
+                                        
+                                        # Compute anchor-day performance (simplified version)
+                                        anchor_maes = []
+                                        
+                                        # Get unique anchor dates (days where we have 7-day continuous forecasts)
+                                        val_df_fold["anchor_date"] = pd.to_datetime(val_df_fold["detection_time"]).dt.date
+                                        anchor_dates = val_df_fold["anchor_date"].unique()
+                                        
+                                        for anchor_date in anchor_dates[-10:]:  # Last 10 anchor dates to speed up
+                                            anchor_rows = val_df_fold[val_df_fold["anchor_date"] == anchor_date]
+                                            if len(anchor_rows) < 5:  # Need minimum sensors
+                                                continue
+                                                
+                                            # Compute MAE for each horizon on this anchor date
+                                            horizon_maes = []
+                                            for h in HORIZON_TUPLE:
+                                                pred_col = f"pred_h{h}d"
+                                                if pred_col in anchor_rows.columns:
+                                                    actual_col = f"temperature_grain_h{h}d"
+                                                    if actual_col in anchor_rows.columns:
+                                                        mask = anchor_rows[[actual_col, pred_col]].notna().all(axis=1)
+                                                        if mask.sum() > 0:
+                                                            mae_h = np.abs(anchor_rows.loc[mask, actual_col] - anchor_rows.loc[mask, pred_col]).mean()
+                                                            horizon_maes.append(mae_h)
+                                            
+                                            if horizon_maes:
+                                                anchor_maes.append(np.mean(horizon_maes))
+                                        
+                                        if anchor_maes:
+                                            fold_anchor_maes.append(np.mean(anchor_maes))
+                                        else:
+                                            fold_anchor_maes.append(999.0)  # Penalty for no valid anchor evaluation
+                                            
+                                    except Exception as e:
+                                        fold_anchor_maes.append(999.0)  # Penalty for evaluation failure
+
+                                mean_anchor_mae = float(np.mean(fold_anchor_maes)) if fold_anchor_maes else 999.0
+
                                 # Notify user in real-time
                                 import streamlit as _st
-                                _st.toast(f"Optuna trial {trial.number}: MAE {mae_tmp:.4f}")
-                                _d(f"[OPTUNA] Trial {trial.number} – MAE {mae_tmp:.4f}")
-                                return mae_tmp
-
+                                _st.toast(f"Trial {trial.number}: Anchor-7d MAE {mean_anchor_mae:.4f}")
+                                _d(f"[OPTUNA] Trial {trial.number} – Anchor-7d MAE {mean_anchor_mae:.4f}")
+                                return mean_anchor_mae
+                            
+                            # ------------------------------------------------------------------
+                            # Create and run Optuna study
+                            # ------------------------------------------------------------------
                             study = optuna.create_study(direction="minimize")
-                            study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-                            base_params = study.best_params
-                            _d(f"[OPTUNA] Best params: {base_params}")
+                            study.optimize(objective, n_trials=n_trials)
+                            
+                            # Update base_params with best parameters
+                            best_params = study.best_params
+                            base_params.update(best_params)
+                            
+                            # Keep quantile objective if it was selected
+                            if use_quantile:
+                                base_params.update({
+                                    "objective": "quantile",
+                                    "alpha": 0.5,
+                                })
+                            
+                            _d(f"[OPTUNA] Optimization complete. Best anchor-7d MAE: {study.best_value:.4f}")
+                            _d(f"[OPTUNA] Best params: {best_params}")
+                            st.toast(f"✅ Optuna found best MAE: {study.best_value:.4f}")
+                            
                         except Exception as exc:
                             _d(f"[OPTUNA] Tuning failed or Optuna not installed: {exc}")
 
@@ -879,11 +1011,11 @@ def main():
                     else:
                         # ----------------------------------------------------------
                         # No validation split (user selected 100 % train) –> create
-                        # an internal 90/10 chronological split to pick the best
+                        # an internal 95/5 chronological split to pick the best
                         # iteration, then refit on the full dataset with that
                         # fixed n_estimators so behaviour matches the legacy flow.
                         # ----------------------------------------------------------
-                        int_train_df, int_val_df = split_train_eval_frac(df, test_frac=0.1)
+                        int_train_df, int_val_df = split_train_eval_frac(df, test_frac=0.05)
 
                         X_int_tr, y_int_tr = features.select_feature_target_multi(
                             int_train_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE
@@ -1497,6 +1629,62 @@ def render_evaluation(model_name: str):
                 except Exception as exc:
                     _d(f"Anchor plot error: {exc}")
 
+                # ------------------------------------------------------
+                # NEW: Sensor-level error tables per horizon (Δ > 0.5 °C)
+                # ------------------------------------------------------
+                THRESH_DIFF = 0.5  # degrees C
+                st.markdown("---")
+                st.markdown("### Sensor-level discrepancies (> 0.5 °C)")
+
+                # Pre-compute yesterday date lookup once for performance
+                full_df_dates = df_eval.copy()
+                full_df_dates["_date"] = pd.to_datetime(full_df_dates["detection_time"]).dt.floor("D")
+
+                for h in HORIZON_TUPLE:
+                    target_date = anchor_date + pd.Timedelta(days=h)
+                    pred_col = f"pred_h{h}d"
+                    if pred_col not in anchor_rows.columns:
+                        continue  # skip horizon not available
+
+                    # Predicted rows (anchor rows already filtered by sensor keys)
+                    preds_h = anchor_rows.copy()
+                    preds_h = preds_h.assign(predicted_temp=preds_h[pred_col])
+
+                    # Actual rows at target date
+                    actual_h = df_eval[pd.to_datetime(df_eval["detection_time"]).dt.floor("D") == target_date].copy()
+                    actual_h = actual_h.assign(actual_temp=actual_h[TARGET_TEMP_COL])
+
+                    key_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in preds_h.columns and c in actual_h.columns]
+
+                    merged_h = preds_h[key_cols + ["predicted_temp"]].merge(
+                        actual_h[key_cols + ["actual_temp", "detection_time"]], on=key_cols, how="inner"
+                    )
+
+                    if merged_h.empty:
+                        st.info(f"h+{h}: No matching sensor readings available.")
+                        continue
+
+                    # Yesterday temp (target_date − 1 day)
+                    yest_date = target_date - pd.Timedelta(days=1)
+                    yest_rows = full_df_dates[full_df_dates["_date"] == yest_date].copy()
+                    yest_rows = yest_rows.assign(yesterday_temp=yest_rows[TARGET_TEMP_COL])
+
+                    merged_h = merged_h.merge(
+                        yest_rows[key_cols + ["yesterday_temp"]], on=key_cols, how="left"
+                    )
+
+                    merged_h["diff"] = (merged_h["predicted_temp"] - merged_h["actual_temp"]).abs()
+                    merged_h = merged_h[merged_h["diff"] > THRESH_DIFF]
+
+                    if merged_h.empty:
+                        st.info(f"h+{h}: No sensor differences > {THRESH_DIFF} °C.")
+                        continue
+
+                    show_cols = key_cols + ["predicted_temp", "actual_temp", "yesterday_temp", "diff"]
+                    st.markdown(f"#### h+{h}")
+                    _st_dataframe_safe(merged_h[show_cols].sort_values("diff", ascending=False), key=f"anchor_sensor_h{h}_{model_name}")
+                # End new block
+
         # ---- Overall MAE across ALL anchor dates (aggregated) ----
         mae_vals_global: list[float] = []
         for anchor_val in sorted(df_eval["forecast_day"].unique()):
@@ -2092,6 +2280,29 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     _d("_interpolate_sensor_numeric: linear interpolation applied per sensor")
 
     # -------------------------------------------------------------
+    # NEW – Subsample to one record every 4 hours per sensor to
+    #       mitigate over-representation of densely sampled probes.
+    # -------------------------------------------------------------
+    def _subsample_per_sensor(df_in: pd.DataFrame, hours: int = 4) -> pd.DataFrame:
+        if df_in.empty or "detection_time" not in df_in.columns:
+            return df_in
+        df_in = df_in.copy()
+        df_in["_dt_floor"] = pd.to_datetime(df_in["detection_time"], errors="coerce").dt.floor(f"{hours}H")
+        key_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z", "_dt_floor"] if c in df_in.columns]
+        df_out = (
+            df_in.sort_values("detection_time")
+            .groupby(key_cols, dropna=False)
+            .head(1)
+            .drop(columns=["_dt_floor"])
+            .reset_index(drop=True)
+        )
+        return df_out
+
+    before_rows = len(df)
+    df = _subsample_per_sensor(df, hours=4)
+    _d(f"subsample_per_sensor: kept {len(df)} / {before_rows} rows (~{len(df)/before_rows:.1%})")
+
+    # -------------------------------------------------------------
     # 3️⃣ Final fill_missing to tidy up any residual NaNs (categoricals etc.)
     # -------------------------------------------------------------
     na_before = df.isna().sum().sum()
@@ -2103,15 +2314,7 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     _d("create_time_features: added year/month/day/hour cols")
     df = features.create_spatial_features(df)
     _d("create_spatial_features: removed grid_index if present")
-    before_lag_na = df["temperature_grain"].isna().sum() if "temperature_grain" in df.columns else 0
-    df = features.add_sensor_lag(df)
-    after_lag_na = df["lag_temp_1d"].isna().sum() if "lag_temp_1d" in df.columns else 0
-    _d(f"add_sensor_lag: lag NaNs={after_lag_na} (target NaNs before={before_lag_na})")
-    # Ensure group identifiers available for downstream splitting/evaluation
-    df = assign_group_id(df)
-    _d("assign_group_id: _group_id column added to dataframe")
-    df = comprehensive_sort(df)
-    _d("comprehensive_sort: dataframe sorted by granary/heap/grid/date")
+    # lag features will be created inside add_multi_lag (includes 1-day)
 
     # -------------------------------------------------------------
     # 4️⃣ Extra temperature features (multi-lag, rolling stats, delta)
@@ -2125,6 +2328,12 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     # -------------------------------------------------------------
     df = features.add_multi_horizon_targets(df, horizons=HORIZON_TUPLE)  # NEW
     _d("add_multi_horizon_targets: future target columns added")
+
+    # Ensure group identifiers available for downstream splitting/evaluation
+    df = assign_group_id(df)
+    _d("assign_group_id: _group_id column added to dataframe")
+    df = comprehensive_sort(df)
+    _d("comprehensive_sort: dataframe sorted by granary/heap/grid/date")
 
     return df
 
@@ -2338,11 +2547,11 @@ def _interpolate_sensor_numeric(df: pd.DataFrame) -> pd.DataFrame:
     if group_cols:
         df[num_cols] = (
             df.groupby(group_cols)[num_cols]
-            .apply(lambda g: g.interpolate(method="linear").ffill().bfill())
+            .apply(lambda g: g.interpolate(method="linear", limit_direction="forward").ffill())
             .reset_index(level=group_cols, drop=True)
         )
     else:
-        df[num_cols] = df[num_cols].interpolate(method="linear").ffill().bfill()
+        df[num_cols] = df[num_cols].interpolate(method="linear", limit_direction="forward").ffill()
 
     return df
 

@@ -39,8 +39,8 @@ def train_lightgbm(
         upper_bound_estimators=n_estimators,
         early_stopping_rounds=100,
     )
-    # Internal 90/10 split for early stopping
-    X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.1, shuffle=False)
+    # Internal 95/5 split for early stopping
+    X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.05, shuffle=False)
     mdl.fit(X_tr, y_tr, eval_set=(X_val, y_val), verbose=False)  # type: ignore[arg-type]
     y_pred = mdl.predict(X)
     metrics = {

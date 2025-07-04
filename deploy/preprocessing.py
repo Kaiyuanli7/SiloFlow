@@ -72,11 +72,11 @@ def _interpolate_sensor_numeric(df: pd.DataFrame) -> pd.DataFrame:
     if group_cols:
         df[num_cols] = (
             df.groupby(group_cols)[num_cols]
-            .apply(lambda g: g.interpolate(method="linear").ffill().bfill())
+            .apply(lambda g: g.interpolate(method="linear", limit_direction="forward").ffill())
             .reset_index(level=group_cols, drop=True)
         )
     else:
-        df[num_cols] = df[num_cols].interpolate(method="linear").ffill().bfill()
+        df[num_cols] = df[num_cols].interpolate(method="linear", limit_direction="forward").ffill()
     return df
 
 
@@ -97,7 +97,6 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     df = cleaning.fill_missing(df)
     df = features.create_time_features(df)
     df = features.create_spatial_features(df)
-    df = features.add_sensor_lag(df)
     df = features.add_multi_lag(df)
     df = features.add_rolling_stats(df, window_days=7)
     df = features.add_rolling_stats(df, window_days=30)
