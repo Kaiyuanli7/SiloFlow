@@ -9,6 +9,7 @@ import pathlib
 import hashlib
 from typing import Dict, Any, Optional, Tuple
 import pandas as pd
+import numpy as np
 
 
 class OptunaParameterCache:
@@ -27,16 +28,37 @@ class OptunaParameterCache:
         # 1. CSV filename
         # 2. Data shape and basic statistics
         # 3. Model configuration
+        # 4. Enhanced data fingerprinting
+        
+        # Create a more comprehensive data fingerprint
+        data_fingerprint = {
+            "shape": df.shape,
+            "dtypes": df.dtypes.to_dict(),
+            "column_names": sorted(df.columns.tolist()),
+            "numeric_cols_stats": {}
+        }
+        
+        # Add statistics for numeric columns to detect data changes
+        numeric_cols = df.select_dtypes(include=[np.number]).columns[:5]  # First 5 numeric columns
+        for col in numeric_cols:
+            if len(df[col]) > 0:
+                col_data = df[col]
+                has_data = bool(not col_data.isna().all())
+                data_fingerprint["numeric_cols_stats"][col] = {
+                    "mean": float(col_data.mean()) if has_data else 0.0,
+                    "std": float(col_data.std()) if has_data else 0.0,
+                    "min": float(col_data.min()) if has_data else 0.0,
+                    "max": float(col_data.max()) if has_data else 0.0
+                }
         
         key_components = {
             "csv_filename": csv_filename,
-            "data_shape": df.shape,
-            "data_hash": hashlib.md5(str(df.dtypes.to_dict()).encode()).hexdigest()[:8],
+            "data_fingerprint": data_fingerprint,
             "model_config": model_config
         }
         
         # Create deterministic hash
-        key_string = json.dumps(key_components, sort_keys=True)
+        key_string = json.dumps(key_components, sort_keys=True, default=str)
         cache_key = hashlib.md5(key_string.encode()).hexdigest()
         
         return cache_key
@@ -83,7 +105,19 @@ class OptunaParameterCache:
         cache_key = self._generate_cache_key(csv_filename, df, model_config)
         cache_path = self._get_cache_path(cache_key)
         
+        print(f"[CACHE-LOADER] Loading cache for: {csv_filename}")
+        print(f"[CACHE-LOADER] Generated cache key: {cache_key}")
+        print(f"[CACHE-LOADER] Cache path: {cache_path}")
+        print(f"[CACHE-LOADER] Cache file exists: {cache_path.exists()}")
+        
+        # List all available cache files for debugging
+        available_files = list(self.cache_dir.glob("optuna_params_*.json"))
+        print(f"[CACHE-LOADER] Available cache files: {len(available_files)}")
+        for i, file in enumerate(available_files[:5]):  # Show first 5
+            print(f"[CACHE-LOADER] Cache file {i+1}: {file.name}")
+        
         if not cache_path.exists():
+            print(f"[CACHE-LOADER] Cache file not found for key: {cache_key}")
             return None
         
         try:

@@ -674,34 +674,8 @@ class MultiLGBMRegressor:
                     import streamlit as st
                     avg_uncertainty = np.mean(uncertainties)
                     
-                    # Conservative system status
-                    if self.conservative_mode:
-                        st.success("🧊 **Conservative Temperature System**: Active - Predictions will be more stable and gradual")
-                        st.info(f"📊 **Stability Features**: {len(self.stability_features)} features with {self.stability_feature_boost}x boost")
-                        st.info(f"🔬 **Uncertainty**: {avg_uncertainty:.3f}°C average with 95% confidence intervals")
-                        
-                        # Detailed conservative system info
-                        with st.expander("🔍 Conservative System Details", expanded=False):
-                            st.write("**Active Features:**")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write("• Thermal inertia modeling")
-                                st.write("• Temperature stability index") 
-                                st.write("• Change resistance metrics")
-                                st.write("• Historical stability patterns")
-                            with col2:
-                                st.write("• Equilibrium temperature tracking")
-                                st.write("• Mean reversion tendency")
-                                st.write("• Progressive horizon dampening")
-                                st.write("• Conservative loss penalties")
-                            
-                            st.write(f"**System Parameters:**")
-                            st.write(f"- Stability boost: {self.stability_feature_boost}x")
-                            st.write(f"- Directional boost: {self.directional_feature_boost}x") 
-                            st.write(f"- Bootstrap samples: {self.n_bootstrap_samples}")
-                            st.write(f"- Average uncertainty: {avg_uncertainty:.3f}°C")
-                    else:
-                        st.warning("⚠️ Conservative mode disabled - predictions may be overly aggressive")
+                    # Show only uncertainty information
+                    st.info(f"🔬 **Uncertainty**: {avg_uncertainty:.3f}°C average with 95% confidence intervals")
                         
                     # Toast notification
                     st.toast(f"🔬 Uncertainty: {avg_uncertainty:.2f}°C avg ± 95% CI | Conservative mode: {'✅' if self.conservative_mode else '❌'}", icon="🔬")

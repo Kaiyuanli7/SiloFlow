@@ -36,6 +36,11 @@ from sklearn.model_selection import GroupKFold
 
 
 _TRANSLATIONS_ZH: dict[str, str] = {
+    # Core UI elements
+    "Language / 语言": "语言 / Language",
+    "English": "英文",
+    "中文": "中文",
+    
     # Sidebar & section titles
     "Data": "数据",
     "Train / Retrain Model": "训练 / 重新训练模型",
@@ -49,36 +54,163 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "Evaluate Model": "评估模型",
     "Select evaluated model": "选择已评估模型",
     "Generate Forecast": "生成预测",
+    "Performance Optimization": "性能优化",
+    "Parameter Cache": "参数缓存",
+    
+    # Training options
+    "Optuna hyperparameter optimization": "Optuna 超参数优化",
+    "Quantile regression objective": "分位数回归目标",
+    "Anchor-day early stopping": "锚定日提前停止",
+    "Horizon Balancing Configuration": "预测期平衡配置",
+    "Balance horizon training": "平衡预测期训练",
+    "Horizon weighting strategy": "预测期权重策略",
+    "equal": "等权重",
+    "increasing": "递增权重",
+    "decreasing": "递减权重",
+    "Optuna trials": "Optuna 试验次数",
+    "Fast Optuna mode": "快速 Optuna 模式",
+    "Enable parallel trials": "启用并行试验",
+    "Parallel jobs": "并行作业数",
+    "Use parameter cache": "使用参数缓存",
+    "Force re-optimization": "强制重新优化",
+    "Clear cache": "清除缓存",
+    "Clear all cache": "清除所有缓存",
+    "Refresh": "刷新",
+    
+    # Help text
+    "Enable Optuna to automatically tune LightGBM parameters for optimal performance": "启用 Optuna 自动调整 LightGBM 参数以获得最佳性能",
+    "Use LightGBM quantile regression (alpha 0.5) for improved mean absolute error performance": "使用 LightGBM 分位数回归（alpha 0.5）以提高平均绝对误差性能",
+    "Use 7-day consecutive forecasting accuracy for early stopping with optimized interval checking": "使用 7 天连续预测准确性进行提前停止，优化间隔检查",
+    "Ensures equal priority for all forecast horizons (H+1 through H+7) during model training": "确保在模型训练期间所有预测期（H+1 到 H+7）具有相同优先级",
+    "equal: All horizons get equal priority (recommended) | increasing: Later horizons get more weight | decreasing: Earlier horizons get more weight": "等权重：所有预测期具有相同优先级（推荐）| 递增权重：后期预测期权重更大 | 递减权重：前期预测期权重更大",
+    "Choose how to divide data into training vs validation sets.": "选择如何将数据分为训练集和验证集。",
+    "Percentage of data used for training; set to 100% to train on the whole dataset without a validation split.": "用于训练的数据百分比；设置为 100% 可在整个数据集上训练而不进行验证分割。",
+    "Use performance optimizations: 2-fold CV, lower tree limits, aggressive early stopping": "使用性能优化：2 折交叉验证、较低的树限制、积极的提前停止",
+    "Run multiple Optuna trials in parallel for 2-4x faster optimization": "并行运行多个 Optuna 试验，优化速度提高 2-4 倍",
+    "Number of parallel processes (max: {} CPU cores)": "并行进程数（最大：{} 个 CPU 核心）",
+    "Automatically save/load optimal parameters to skip redundant Optuna optimization": "自动保存/加载最优参数以跳过冗余的 Optuna 优化",
+    "Run Optuna even if cached parameters exist": "即使存在缓存参数也运行 Optuna",
+    "Clear all cached parameters": "清除所有缓存的参数",
+    "Show detailed internal processing messages": "显示详细的内部处理消息",
+    
+    # Status messages and notifications
+    "Optuna hyperparameter optimization enabled": "Optuna 超参数优化已启用",
+    "Using default LightGBM parameters": "使用默认 LightGBM 参数",
+    "Quantile regression objective enabled": "分位数回归目标已启用",
+    "Using standard regression objective": "使用标准回归目标",
+    "Anchor-day early stopping enabled for enhanced 7-day accuracy": "锚定日提前停止已启用，提高 7 天准确性",
+    "Using standard early stopping method": "使用标准提前停止方法",
+    "Horizon balancing enabled - correcting forecast horizon bias": "预测期平衡已启用 - 纠正预测期偏差",
+    "Using standard horizon weighting approach": "使用标准预测期权重方法",
+    "Future-safe mode enabled - environmental variables excluded": "未来安全模式已启用 - 排除环境变量",
+    "All variables included, including environmental data": "包含所有变量，包括环境数据",
+    
+    # Processing messages
+    "Processing uploaded file: {}": "处理上传的文件：{}",
+    "Processing uploaded file...": "处理上传的文件...",
+    "Applied filters: {}": "应用的过滤器：{}",
+    "Displaying all locations": "显示所有位置",
+    "Data preprocessing complete. Dataset shape: {}": "数据预处理完成。数据集形状：{}",
+    "Selected model: {}": "选择的模型：{}",
+    "Initiating model training process...": "启动模型训练过程...",
+    "Starting model evaluation...": "开始模型评估...",
+    "Starting evaluation and forecast generation...": "开始评估和预测生成...",
+    "Evaluation completed for {} model(s)": "已完成 {} 个模型的评估",
+    "Forecast generated for {} model(s)": "已为 {} 个模型生成预测",
+    "Generating forecast for selected model...": "为选定模型生成预测...",
+    
+    # Conservative system messages
+    "Conservative Temperature System": "保守温度系统",
+    "Conservative mode": "保守模式",
+    "Stability boost": "稳定性增强",
+    "Directional boost": "方向性增强",
+    "Bootstrap samples": "自助采样数",
+    "Conservative System Features (Click to expand)": "保守系统特性（点击展开）",
+    "Thermal Physics Features:": "热物理特性：",
+    "Thermal Inertia": "热惯性",
+    "Stability Index": "稳定指数",
+    "Change Resistance": "变化阻力",
+    "Equilibrium Temperature": "平衡温度",
+    "Mean Reversion": "均值回归",
+    "Historical Stability": "历史稳定性",
+    "Dampening Factor": "阻尼因子",
+    "Progressive Penalties": "累进惩罚",
+    "How This Improves Predictions:": "这如何改善预测：",
+    
+    # Parallel processing messages
+    "Parallel processing available: {}, max_workers: {}, CPU cores: {}": "并行处理可用：{}，最大工作进程：{}，CPU 核心：{}",
+    "Parallel processing: {} workers on {} cores": "并行处理：{} 个工作进程在 {} 个核心上",
+    "Parallel Processing": "并行处理",
+    "Workers": "工作进程",
+    "Expected Speedup": "预期加速",
+    "3-5x faster feature engineering": "特征工程速度提高 3-5 倍",
+    "2-4x faster hyperparameter optimization": "超参数优化速度提高 2-4 倍",
+    "Active": "激活",
+    "Disabled": "禁用",
+    "Enable All Cores": "启用所有核心",
+    "Disable Parallel": "禁用并行",
+    "Enable Parallel Processing": "启用并行处理",
+    "Could not retrieve parallel processing information: {}": "无法检索并行处理信息：{}",
+    
+    # Parameter cache messages
+    "Cached parameter sets": "缓存的参数集",
+    "Best MAE": "最佳 MAE",
+    "Trials": "试验",
+    "Data shape": "数据形状",
+    "Cached": "缓存时间",
+    "Clear this": "清除此项",
+    "No cached parameters available.": "没有可用的缓存参数。",
+    "Train a model with Optuna optimization to create cache entries.": "使用 Optuna 优化训练模型以创建缓存条目。",
+    "Clearing parameter cache...": "正在清除参数缓存...",
+    "Parameter cache cleared!": "参数缓存已清除！",
+    "Clearing cache for {}...": "正在清除 {} 的缓存...",
+    "Refreshing cache view...": "正在刷新缓存视图...",
+    
     # Tab labels
     "Summary": "摘要",
     "Predictions": "预测明细",
     "3D Grid": "三维网格",
     "Time Series": "时间序列",
+    "Anchor 7-day": "锚定 7 天",
+    "Uncertainty": "不确定性",
     "Extremes": "极值",
     "Debug": "调试",
     "Evaluation": "评估",
     "Forecast": "预测",
-    # Extremes plots
-    "Average Daily Absolute Error (h+1)": "每日平均绝对误差 (h+1)",
-    "Over-Prediction (h+1)": "过预测 (h+1)",
-    "Under-Prediction (h+1)": "欠预测 (h+1)",
-    # Misc
-    "Select date": "选择日期",
-    # 🔽 NEW translations
+    
+    # Data section
     "Verbose debug mode": "详细调试模式",
     "Upload your own CSV": "上传您的 CSV",
     "Or pick a bundled sample dataset:": "或选择一个捆绑示例数据集：",
     "Sample dataset": "示例数据集",
+    "-- Select sample --": "-- 选择示例 --",
+    "Loading sample dataset: {}": "正在加载示例数据集：{}",
+    "Sample dataset '{}' selected.": "已选择示例数据集'{}'。",
     "Raw Data": "原始数据",
     "Sorted Data": "已排序数据",
+    
+    # Location filter
     "Location Filter": "位置筛选器",
     "Warehouse": "仓库",
     "Silo": "筒仓",
+    "All": "全部",
+    
+    # Training section
     "Train on uploaded CSV": "使用上传的 CSV 进行训练",
     "Model file": "模型文件",
     "Apply to all models": "应用到所有模型",
     "Evaluate": "评估",
     "Eval & Forecast": "评估并预测",
+    
+    # Status indicators
+    "ACTIVE": "激活",
+    "DISABLED": "禁用",
+    "High": "高",
+    "Medium": "中等",
+    "Low": "低",
+    "Sequential mode: Recommended for small trial counts or debugging": "顺序模式：推荐用于小试验次数或调试",
+    
+    # Messages and notifications
     "No forecast generated yet for this model.": "该模型尚未生成预测。",
     "Uploaded file appears empty or unreadable. Please verify the CSV.": "上传的文件为空或无法读取。请检查 CSV。",
     "Model not found – please train or select another.": "未找到模型 – 请训练或选择其他模型。",
@@ -90,9 +222,52 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "Evaluating model(s) – please wait...": "正在评估模型 – 请稍候...",
     "Generating forecast…": "正在生成预测…",
     "Forecast generated – switch tabs to view.": "预测已生成 – 切换选项卡查看。",
+    "Model evaluation completed successfully.": "模型评估成功完成。",
+    "Forecast generation completed successfully.": "预测生成成功完成。",
+    "training completed (validation split contained no ground-truth targets).": "训练完成（验证分割不包含真实目标）。",
+    "training completed. MAE: {}, RMSE: {}": "训练完成。MAE：{}，RMSE：{}",
+    "Model training completed successfully": "模型训练成功完成",
+    "Training completed successfully. MAE: {}, RMSE: {}": "训练成功完成。MAE：{}，RMSE：{}",
+    
+    # Optuna optimization
+    "Starting Optuna hyperparameter optimization: {} trials": "开始 Optuna 超参数优化：{} 次试验",
+    "Using {} parallel processes for enhanced optimization speed": "使用 {} 个并行进程以提高优化速度",
+    "Live trial results will be displayed below as optimization progresses...": "优化过程中的实时试验结果将显示在下方...",
+    "Live Optuna Trial Results": "实时 Optuna 试验结果",
+    "Best Trial": "最佳试验",
+    "Trial": "试验",
+    "Learning Rate": "学习率",
+    "Max Depth": "最大深度",
+    "Num Leaves": "叶节点数",
+    "Optuna Optimization Complete": "Optuna 优化完成",
+    "Total Trials": "总试验数",
+    "Improvement": "改进",
+    "View All Trial Results": "查看所有试验结果",
+    "Subsample": "子采样",
+    "Colsample": "列采样",
+    "Best Parameters Found": "找到的最佳参数",
+    "Optuna optimization completed. Best MAE: {}{}": "Optuna 优化完成。最佳 MAE：{}{}",
+    "Parallel optimization completed using {} processes": "使用 {} 个进程的并行优化完成",
+    "Optuna optimization failed: {}": "Optuna 优化失败：{}",
+    "Using cached optimal parameters!": "使用缓存的最优参数！",
+    "Best Parameters Found: Learning Rate: {}, Max Depth: {}, Num Leaves: {}": "找到的最佳参数：学习率：{}，最大深度：{}，叶节点数：{}",
+    "Optimal parameters saved to cache!": "最优参数已保存到缓存！",
+    "Failed to save parameters to cache": "保存参数到缓存失败",
+    
+    # Model leaderboard
     "Model Leaderboard": "模型排行榜",
     "No evaluations yet.": "尚无评估结果。",
+    "model": "模型",
+    "confidence": "置信度",
+    "accuracy": "准确率",
+    "rmse": "RMSE",
+    "mae": "MAE",
+    "rank": "排名",
+    
+    # Debug
     "Debug Log (full)": "调试日志（完整）",
+    
+    # Evaluation metrics
     "Forecast Summary (per day)": "预测摘要（每日）",
     "Top Predictive Features": "最具预测力的特征",
     "Daily Extremes (h+1)": "每日极值 (h+1)",
@@ -101,18 +276,11 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "Training – X_train": "训练 – X_train",
     "Evaluation – X_eval": "评估 – X_eval",
     "Model Feature Columns (order)": "模型特征列（顺序）",
-    "No forecast generated for this model yet.": "尚未为该模型生成预测。",
-    "Forecast Summary (predicted)": "预测摘要（预测）",
-    "Daily Predicted Extremes": "每日预测极值",
-    "No predictions found to compute extremes.": "未找到用于计算极值的预测。",
-    "Future Feature Matrix (first 100 rows)": "未来特征矩阵（前 100 行）",
-    "|Mean(X_eval) − Mean(X_future)| (Top 20)": "|Mean(X_eval) − Mean(X_future)|（前 20）",
-    "X_future matrix not available yet.": "X_future 矩阵尚不可用。",
-    "Please evaluate the model first.": "请先评估模型。",
-    "Unable to access base data or model for forecasting.": "无法访问基础数据或模型进行预测。",
     "High temperature forecast detected for at least one grain type – monitor closely!": "检测到某些粮食类型的高温预测 – 请密切监控！",
     "All predicted temperatures within safe limits for their grain types": "所有预测温度均在其粮食类型的安全范围内",
     "LightGBM uses early stopping; optimal number of trees will be selected automatically.": "LightGBM 使用提前停止；将自动选择最佳树数量。",
+    
+    # Metrics labels
     "Conf (%)": "置信度 (%)",
     "Acc (%)": "准确率 (%)",
     "MAE h+1": "MAE h+1",
@@ -131,8 +299,265 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "MAE per horizon": "各预测期 MAE",
     "RMSE per horizon": "各预测期 RMSE",
     "MAPE per horizon": "各预测期 MAPE",
+    
+    # Explanations
     "Row-wise horizon metrics (above) average the error of each h-day-ahead prediction across all evaluation rows.\nFor a real-world, bulletin-style view of performance, switch to the 'Anchor 7-day' tab, where metrics are computed by freezing predictions on an anchor day and comparing them with observations that occur h days later.": "上方按预测期汇总的指标是对评估集每一行的 h 日预测误差取平均。\n若想查看更贴近实际业务的表现，请切换到 \"Anchor 7-day\" 页签：在那里，指标在锚定日冻结预测，再与 h 天后的真实温度比较",
     "Anchor metrics emulate operational use: predictions are frozen on the selected anchor day (forecast_day = 1) and each horizon h is scored against the real temperature measured h days later.\nThis gives the most realistic estimate of future-forecast performance.": "Anchor 指标模拟实际操作流程：在锚定日（forecast_day = 1）冻结预测，并在 h 天后用真实观测温度打分。\n这能提供对未来预测性能的最真实估计。",
+    
+    # Uncertainty analysis
+    "Uncertainty Analysis & Prediction Confidence": "不确定性分析和预测置信度",
+    "Uncertainty Estimation": "不确定性估计",
+    "Prediction Confidence Intervals": "预测置信区间",
+    "Avg Uncertainty": "平均不确定性",
+    "Max Uncertainty": "最大不确定性",
+    "Min Uncertainty": "最小不确定性",
+    "Reliability": "可靠性",
+    "Uncertainty by Forecast Horizon": "按预测期的不确定性",
+    "Horizon": "预测期",
+    "Days Ahead": "预测天数",
+    "Avg Uncertainty (°C)": "平均不确定性 (°C)",
+    "Confidence Level": "置信水平",
+    "Available Confidence Intervals": "可用置信区间",
+    "Type": "类型",
+    "Available": "可用",
+    "Lower Bound": "下界",
+    "Upper Bound": "上界",
+    "How to Interpret Uncertainty": "如何解释不确定性",
+    "Uncertainty intervals will be available after making predictions": "进行预测后将提供不确定性区间",
+    "Could not load model for uncertainty analysis: {}": "无法加载模型进行不确定性分析：{}",
+    "Please ensure the model is properly trained and saved.": "请确保模型已正确训练和保存。",
+    
+    # Forecasting
+    "No forecast generated for this model yet.": "尚未为该模型生成预测。",
+    "Forecast Summary (predicted)": "预测摘要（预测）",
+    "Daily Predicted Extremes": "每日预测极值",
+    "No predictions found to compute extremes.": "未找到用于计算极值的预测。",
+    "Future Feature Matrix (first 100 rows)": "未来特征矩阵（前 100 行）",
+    "|Mean(X_eval) − Mean(X_future)| (Top 20)": "|Mean(X_eval) − Mean(X_future)|（前 20）",
+    "X_future matrix not available yet.": "X_future 矩阵尚不可用。",
+    "Please evaluate the model first.": "请先评估模型。",
+    "Unable to access base data or model for forecasting.": "无法访问基础数据或模型进行预测。",
+    "Download predictions CSV": "下载预测 CSV",
+    "Select day": "选择天数",
+    
+    # Anchor 7-day tab
+    "7-Day Forecast from Anchor Day (forecast_day=1)": "锚定日的 7 天预测（forecast_day=1）",
+    "forecast_day column missing – cannot compute anchor forecast.": "forecast_day 列缺失 – 无法计算锚定预测。",
+    "No anchor dates available.": "没有可用的锚定日期。",
+    "Select anchor date": "选择锚定日期",
+    "No rows for selected anchor date {}.": "选定锚定日期 {} 没有行。",
+    "horizon_day": "预测期天数",
+    "forecast_date": "预测日期",
+    "predicted_mean": "预测平均值",
+    "actual_mean": "实际平均值",
+    "max_abs_err": "最大绝对误差",
+    "Anchor-day 7-Day Forecast vs Actual": "锚定日 7 天预测与实际对比",
+    "Date": "日期",
+    "Temperature (°C)": "温度 (°C)",
+    "Predicted": "预测",
+    "Actual": "实际",
+    "Sensor-level discrepancies (> 0.5 °C)": "传感器级别差异（> 0.5 °C）",
+    "h+{}: No matching sensor readings available.": "h+{}：没有匹配的传感器读数。",
+    "h+{}: No sensor differences > {} °C.": "h+{}：没有传感器差异 > {} °C。",
+    "Aggregate MAE Metrics Across All Anchors": "所有锚定点的聚合 MAE 指标",
+    "Avg MAE (all anchors × 7 days)": "平均 MAE（所有锚定点 × 7 天）",
+    "Max MAE (all anchors × 7 days)": "最大 MAE（所有锚定点 × 7 天）",
+    "MAE by Forecast Horizon (All Anchors)": "按预测期的 MAE（所有锚定点）",
+    "h+{} MAE": "h+{} MAE",
+    "h+{} Max |Error|": "h+{} 最大 |误差|",
+    
+    # Extremes
+    "Average Daily Absolute Error (h+1)": "每日平均绝对误差 (h+1)",
+    "Over-Prediction (h+1)": "过预测 (h+1)",
+    "Under-Prediction (h+1)": "欠预测 (h+1)",
+    "Select date": "选择日期",
+    "date": "日期",
+    "type": "类型",
+    "predicted": "预测",
+    "actual": "实际",
+    "error": "误差",
+    "avg_daily_abs_error": "每日平均绝对误差",
+    "Over": "过度",
+    "Under": "不足",
+    "Max": "最大",
+    "Min": "最小",
+    "Avg |Error|": "平均 |误差|",
+    "Prediction column '{}' not found – unable to draw time-series for h+{}.": "未找到预测列 '{}' – 无法为 h+{} 绘制时间序列。",
+    "Actual Avg": "实际平均值",
+    "Predicted h+{} (eval)": "预测 h+{}（评估）",
+    "Predicted h+{} (future)": "预测 h+{}（未来）",
+    "Average Grain Temperature – h+{}": "平均粮食温度 – h+{}",
+    "Xaxis": "X 轴",
+    "Yaxis": "Y 轴",
+    
+    # Plot labels
+    "Temp (°C)": "温度 (°C)",
+    "Pred (°C)": "预测 (°C)",
+    "Δ (°C)": "Δ (°C)",
+    "grid_x": "网格 X",
+    "grid_z": "网格 Z",
+    "grid_y": "网格 Y",
+    "Prediction Uncertainty by Forecast Horizon": "按预测期的预测不确定性",
+    "Forecast Horizon": "预测期",
+    "Average Uncertainty (°C)": "平均不确定性 (°C)",
+    
+    # Conservative system detailed messages
+    "Conservative Temperature System": "保守温度系统",
+    "Models temperature resistance to change": "模型温度变化阻力",
+    "Measures temperature consistency": "测量温度一致性",
+    "Quantifies fluctuation dampening": "量化波动阻尼",
+    "Natural settling point per sensor": "每个传感器的自然平衡点",
+    "Tendency to return to equilibrium": "回归平衡的趋势",
+    "Long-term stability patterns": "长期稳定模式",
+    "Dynamic change dampening": "动态变化阻尼",
+    "Increasing constraints for longer horizons": "对较长预测期的递增约束",
+    "Reduces aggressive changes": "减少激进变化",
+    "Improves 7-day accuracy": "提高 7 天准确性",
+    "Sensor-specific learning": "传感器特定学习",
+    "Physical realism": "物理现实性",
+    "Predictions respect thermal inertia": "预测尊重热惯性",
+    "Less cumulative error buildup": "更少的累积误差堆积",
+    "Each probe learns its stability characteristics": "每个探针学习其稳定特性",
+    "Temperature evolution follows grain physics": "温度演变遵循粮食物理学",
+    "Conservative mode disabled - predictions may be aggressive": "保守模式禁用 - 预测可能激进",
+    "Enable conservative mode in model training to get more stable predictions": "在模型训练中启用保守模式以获得更稳定的预测",
+    
+    # More uncertainty messages
+    "Low uncertainty": "低不确定性",
+    "High confidence predictions": "高置信度预测",
+    "Medium uncertainty": "中等不确定性",
+    "Moderate confidence": "中等置信度",
+    "High uncertainty": "高不确定性",
+    "Lower confidence, use with caution": "低置信度，谨慎使用",
+    "~2/3 of actual values should fall within this range": "约 2/3 的实际值应在此范围内",
+    "~19/20 of actual values should fall within this range": "约 19/20 的实际值应在此范围内",
+    
+    # Additional status messages
+    "System Configuration:": "系统配置：",
+    "Stability Features": "稳定性特征",
+    "8 thermal physics features": "8 个热物理特征",
+    "Stability Boost": "稳定性增强",
+    "3.0x feature importance": "3.0 倍特征重要性",
+    "Uncertainty Samples": "不确定性样本",
+    "50 bootstrap samples": "50 个自助采样",
+    "Directional Features": "方向性特征",
+    "2.0x importance boost": "2.0 倍重要性增强",
+    "Horizon Balancing": "预测期平衡",
+    "Enabled": "已启用",
+    "Conservative Loss": "保守损失",
+    "Thermal inertia penalties": "热惯性惩罚",
+    "Expected Benefits:": "预期收益：",
+    "More stable predictions": "更稳定的预测",
+    "Respects grain thermal inertia": "尊重粮食热惯性",
+    "Reduced aggressive changes": "减少激进变化",
+    "Conservative temperature evolution": "保守的温度演变",
+    "Better 7-day accuracy": "更好的 7 天准确性",
+    "Less cumulative error buildup": "更少的累积误差堆积",
+    "Uncertainty quantification": "不确定性量化",
+    "Confidence intervals for all predictions": "所有预测的置信区间",
+    "Conservative system initialized - thermal stability features active": "保守系统已初始化 - 热稳定性特征激活",
+    
+    # System status messages
+    "System": "系统",
+    "ACTIVE": "激活",
+    "DISABLED": "禁用",
+    "Conservative System Status": "保守系统状态",
+    "Conservative Temperature Prediction": "保守温度预测",
+    "Quantile Regression Active": "分位数回归激活",
+    "Using quantile objective with uncertainty quantification for enhanced 7-day forecasting accuracy.": "使用分位数目标和不确定性量化以增强 7 天预测准确性。",
+    
+    # Missing translations for recent updates
+    "Optuna configured for {} parallel processes": "Optuna 配置为 {} 个并行进程",
+    "Approximately {}x faster optimization": "优化速度约提高 {} 倍",
+    "Recommended for": "推荐用于",
+    "trials with 4+ CPU cores available": "需要 4+ CPU 核心的试验",
+    "sets available": "套可用",
+    "Later horizons (H+7) will receive 4x more weight than earlier horizons (H+1)": "后期预测期（H+7）将比前期预测期（H+1）获得 4 倍权重",
+    "Earlier horizons (H+1) will receive 4x more weight than later horizons (H+7)": "前期预测期（H+1）将比后期预测期（H+7）获得 4 倍权重",
+    "All horizons will receive equal weight (1.0x each)": "所有预测期将获得相等权重（各 1.0 倍）",
+    
+    # Comprehensive missing translations
+    "Parameter Cache": "参数缓存",
+    "Use parameter cache": "使用参数缓存",
+    "Automatically save/load optimal parameters to skip redundant Optuna optimization": "自动保存/加载最优参数以跳过冗余的 Optuna 优化",
+    "Force re-optimization": "强制重新优化",
+    "Run Optuna even if cached parameters exist": "即使存在缓存参数也运行 Optuna",
+    "Clear cache": "清除缓存",
+    "Clear all cached parameters": "清除所有缓存参数",
+    "Clearing parameter cache...": "正在清除参数缓存...",
+    "Parameter cache cleared!": "参数缓存已清除！",
+    "Cached parameters": "缓存参数",
+    "Future-safe mode enabled - environmental variables excluded": "未来安全模式已启用 - 排除环境变量",
+    "All variables included, including environmental data": "包含所有变量，包括环境数据",
+    "Anchor-day early stopping": "锚日早停法",
+    "Use 7-day consecutive forecasting accuracy for early stopping with optimized interval checking": "使用7天连续预测准确性进行早停，并采用优化的间隔检查",
+    "Anchor-day early stopping enabled for enhanced 7-day accuracy": "锚日早停法已启用，以增强7天准确性",
+    "Using standard early stopping method": "使用标准早停方法",
+    "Horizon Balancing Configuration": "预测期平衡配置",
+    "Balance horizon training": "平衡预测期训练",
+    "Ensures equal priority for all forecast horizons (H+1 through H+7) during model training": "确保模型训练期间所有预测期（H+1到H+7）具有相等的优先级",
+    "Horizon balancing enabled - correcting forecast horizon bias": "预测期平衡已启用 - 纠正预测期偏差",
+    "Using standard horizon weighting approach": "使用标准预测期权重方法",
+    "Horizon weighting strategy": "预测期权重策略",
+    "equal": "相等",
+    "increasing": "递增",
+    "decreasing": "递减",
+    "equal: All horizons get equal priority (recommended) | increasing: Later horizons get more weight | decreasing: Earlier horizons get more weight": "相等：所有预测期获得相等优先级（推荐）| 递增：后期预测期获得更多权重 | 递减：前期预测期获得更多权重",
+    "Performance Optimization": "性能优化",
+    "Parallel Processing": "并行处理",
+    "Active": "激活",
+    "Workers": "工作器",
+    "Expected Speedup": "预期加速",
+    "3-5x faster feature engineering": "特征工程快3-5倍",
+    "2-4x faster hyperparameter optimization": "超参数优化快2-4倍",
+    "Enable All Cores": "启用所有核心",
+    "Disable Parallel": "禁用并行",
+    "Disabled": "已禁用",
+    "Enable Parallel Processing": "启用并行处理",
+    "Could not retrieve parallel processing information: {}": "无法获取并行处理信息：{}",
+    "Train on uploaded CSV": "在上传的CSV上训练",
+    "Initiating model training process...": "正在启动模型训练过程...",
+    "Training model – please wait...": "正在训练模型 - 请稍候...",
+    "Using cached optimal parameters!": "使用缓存的最优参数！",
+    "Best MAE": "最佳 MAE",
+    "Cached": "已缓存",
+    "Starting Optuna hyperparameter optimization: {} trials": "开始 Optuna 超参数优化：{} 次试验",
+    "Using {} parallel processes for enhanced optimization speed": "使用 {} 个并行进程以提高优化速度",
+    "Live trial results will be displayed below as optimization progresses...": "优化进行时下方将显示实时试验结果...",
+    
+    # Conservative system translations
+    "Conservative System Status": "保守系统状态",
+    "Conservative Temperature Prediction": "保守温度预测",
+    "System Configuration": "系统配置",
+    "Stability Features": "稳定性特征",
+    "8 thermal physics features": "8 个热物理特征",
+    "Stability Boost": "稳定性增强",
+    "3.0x feature importance": "3.0 倍特征重要性",
+    "Uncertainty Samples": "不确定性样本",
+    "50 bootstrap samples": "50 个自举样本",
+    "Directional Features": "方向性特征",
+    "2.0x importance boost": "2.0 倍重要性增强",
+    "Horizon Balancing": "预测期平衡",
+    "Enabled": "已启用",
+    "Conservative Loss": "保守损失",
+    "Thermal inertia penalties": "热惯性惩罚",
+    "Expected Benefits": "预期效益",
+    "More stable predictions": "更稳定的预测",
+    "Respects grain thermal inertia": "尊重粮食热惯性",
+    "Reduced aggressive changes": "减少激进变化",
+    "Conservative temperature evolution": "保守温度演化",
+    "Better 7-day accuracy": "更好的7天准确性",
+    "Less cumulative error buildup": "更少的累积误差积累",
+    "Uncertainty quantification": "不确定性量化",
+    "Confidence intervals for all predictions": "所有预测的置信区间",
+    
+    # Additional cache management translations
+    "Cached parameter sets": "缓存参数集",
+    "Data shape": "数据形状",
+    "Trials": "试验",
+    "Clear this": "清除此项",
+    "Clearing cache for {}...": "正在清除 {} 的缓存...",
+    "Clear all cache": "清除所有缓存",
 }
 
 
@@ -752,83 +1177,109 @@ def main():
             if model_choice == "LightGBM":
                 st.caption(_t("LightGBM uses early stopping; optimal number of trees will be selected automatically."))
                 n_trees = 2000  # upper bound (not shown to user)
-                tune_optuna = st.checkbox("Optuna hyperparameter optimization", value=False, help="Enable Optuna to automatically tune LightGBM parameters for optimal performance")
+                tune_optuna = st.checkbox(_t("Optuna hyperparameter optimization"), value=False, help=_t("Enable Optuna to automatically tune LightGBM parameters for optimal performance"))
                 if tune_optuna and "optuna_enabled" not in st.session_state:
-                    st.toast("Optuna hyperparameter optimization enabled")
+                    st.toast(_t("Optuna hyperparameter optimization enabled"))
                     st.session_state["optuna_enabled"] = True
                 elif not tune_optuna and st.session_state.get("optuna_enabled"):
-                    st.toast("Using default LightGBM parameters")
+                    st.toast(_t("Using default LightGBM parameters"))
                     st.session_state["optuna_enabled"] = False
                 
-                use_quantile = st.checkbox("Quantile regression objective", value=True, help="Use LightGBM quantile regression (alpha 0.5) for improved mean absolute error performance")
+                use_quantile = st.checkbox(_t("Quantile regression objective"), value=True, help=_t("Use LightGBM quantile regression (alpha 0.5) for improved mean absolute error performance"))
                 if use_quantile:
-                    st.info("**Quantile Regression Active**: Using quantile objective with uncertainty quantification for enhanced 7-day forecasting accuracy.")
+                    st.info(f"**{_t('Quantile Regression Active')}**: {_t('Using quantile objective with uncertainty quantification for enhanced 7-day forecasting accuracy.')}")
                 if use_quantile and "quantile_enabled" not in st.session_state:
-                    st.toast("Quantile regression objective enabled")
+                    st.toast(_t("Quantile regression objective enabled"))
                     st.session_state["quantile_enabled"] = True
                 elif not use_quantile and st.session_state.get("quantile_enabled"):
-                    st.toast("Using standard regression objective")
+                    st.toast(_t("Using standard regression objective"))
                     st.session_state["quantile_enabled"] = False
                 if tune_optuna:
-                    n_trials = st.slider("Optuna trials", 20, 200, 50, step=10)
+                    n_trials = st.slider(_t("Optuna trials"), 20, 200, 50, step=10)
                     optuna_speed_mode = st.checkbox(
-                        "Fast Optuna mode", 
+                        _t("Fast Optuna mode"), 
                         value=True, 
-                        help="Use performance optimizations: 2-fold CV, lower tree limits, aggressive early stopping"
+                        help=_t("Use performance optimizations: 2-fold CV, lower tree limits, aggressive early stopping")
                     )
                     
                     # Parallel Optuna optimization settings
-                    st.markdown("**⚡ Parallel Optimization**")
+                    st.markdown(f"**⚡ {_t('Parallel Optimization')}**")
                     optuna_parallel = st.checkbox(
-                        "Enable parallel trials",
-                        value=True,
-                        help="Run multiple Optuna trials in parallel for 2-4x faster optimization"
+                        _t("Enable parallel trials"),
+                        value=False,
+                        help=_t("Run multiple Optuna trials in parallel for 2-4x faster optimization")
                     )
                     
                     if optuna_parallel:
                         optuna_n_jobs = st.slider(
-                            "Parallel jobs", 
+                            _t("Parallel jobs"), 
                             1, min(multiprocessing.cpu_count(), 8), 
                             min(4, multiprocessing.cpu_count()), 
                             step=1,
-                            help=f"Number of parallel processes (max: {multiprocessing.cpu_count()} CPU cores)"
+                            help=_t("Number of parallel processes (max: {} CPU cores)").format(multiprocessing.cpu_count())
                         )
                         if optuna_n_jobs != st.session_state.get("last_optuna_jobs", 4):
-                            st.toast(f"Optuna configured for {optuna_n_jobs} parallel processes")
+                            st.toast(_t("Optuna configured for {} parallel processes").format(optuna_n_jobs))
                             st.session_state["last_optuna_jobs"] = optuna_n_jobs
                             
                         # Performance expectations
-                        st.caption(f"**Expected speedup**: Approximately {min(optuna_n_jobs, 4)}x faster optimization")
-                        st.caption(f"**Recommended for**: {n_trials}+ trials with 4+ CPU cores available")
+                        st.caption(f"**{_t('Expected Speedup')}**: {_t('Approximately {}x faster optimization').format(min(optuna_n_jobs, 4))}")
+                        st.caption(f"**{_t('Recommended for')}**: {n_trials}+ {_t('trials with 4+ CPU cores available')}")
                     else:
                         optuna_n_jobs = 1
-                        st.caption("Sequential mode: Recommended for small trial counts or debugging")
+                        st.caption(_t("Sequential mode: Recommended for small trial counts or debugging"))
                     
                     # Optuna parameter caching controls
-                    st.subheader("📦 Parameter Caching")
+                    st.subheader(f"📦 {_t('Parameter Cache')}")
                     use_param_cache = st.checkbox(
-                        "Use parameter cache", 
+                        _t("Use parameter cache"), 
                         value=True, 
-                        help="Automatically save/load optimal parameters to skip redundant Optuna optimization"
+                        help=_t("Automatically save/load optimal parameters to skip redundant Optuna optimization")
                     )
                     
                     col_cache1, col_cache2 = st.columns(2)
                     with col_cache1:
                         force_reoptimize = st.checkbox(
-                            "Force re-optimization", 
+                            _t("Force re-optimization"), 
                             value=False, 
-                            help="Run Optuna even if cached parameters exist"
+                            help=_t("Run Optuna even if cached parameters exist")
                         )
                     with col_cache2:
-                        if st.button("Clear cache", help="Clear all cached parameters"):
-                            st.toast("🧽 Clearing parameter cache...", icon="🧽")
+                        if st.button(_t("Clear cache"), help=_t("Clear all cached parameters")):
+                            st.toast(f"🧽 {_t('Clearing parameter cache...')}", icon="🧽")
                             clear_cache()
-                            st.success("Parameter cache cleared!")
+                            st.success(_t("Parameter cache cleared!"))
                     
-                    # Show cached parameter info
+                    # Show cached parameter info with debugging
                     cached_params = list_cached_params()
                     if cached_params:
-                        st.write(f"📋 **Cached parameters**: {len(cached_params)} sets available")
+                        st.write(f"📋 **{_t('Cached parameters')}**: {len(cached_params)} {_t('sets available')}")
+                        
+                        # Debug: Show cache details for current CSV
+                        if st.checkbox("🔍 Show cache debugging info", value=False):
+                            csv_filename = uploaded_file.name if uploaded_file else "No file"
+                            st.write(f"**Debug Info for {csv_filename}:**")
+                            
+                            # Show all cached files
+                            for key, info in cached_params.items():
+                                cached_csv = info.get('csv_filename', 'Unknown')
+                                cached_mae = info.get('best_value', 'N/A')
+                                cached_trials = info.get('n_trials', 'N/A')
+                                cached_shape = info.get('data_shape', 'N/A')
+                                
+                                match_indicator = "✅" if cached_csv == csv_filename else "❌"
+                                st.write(f"{match_indicator} **{cached_csv}** - MAE: {cached_mae}, Trials: {cached_trials}, Shape: {cached_shape}")
+                            
+                            # Show current configuration
+                            if uploaded_file:
+                                current_config = {
+                                    "quantile_mode": use_quantile,
+                                    "speed_mode": optuna_speed_mode,
+                                    "n_trials": n_trials,
+                                    "cache_enabled": use_param_cache,
+                                    "force_reopt": force_reoptimize
+                                }
+                                st.write(f"**Current Config**: {current_config}")
             else:
                 n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
                 optuna_speed_mode = False  # Default when Optuna is disabled
@@ -838,53 +1289,53 @@ def main():
                 force_reoptimize = False  # Default when Optuna is disabled
             future_safe = st.checkbox(_t("Future-safe (exclude env vars)"), value=False)
             if future_safe and "future_safe_enabled" not in st.session_state:
-                st.toast("Future-safe mode enabled - environmental variables excluded")
+                st.toast(_t("Future-safe mode enabled - environmental variables excluded"))
                 st.session_state["future_safe_enabled"] = True
             elif not future_safe and st.session_state.get("future_safe_enabled"):
-                st.toast("All variables included, including environmental data")
+                st.toast(_t("All variables included, including environmental data"))
                 st.session_state["future_safe_enabled"] = False
             
             anchor_early_stop = st.checkbox(
-                "Anchor-day early stopping", 
+                _t("Anchor-day early stopping"), 
                 value=True, 
-                help="Use 7-day consecutive forecasting accuracy for early stopping with optimized interval checking"
+                help=_t("Use 7-day consecutive forecasting accuracy for early stopping with optimized interval checking")
             )
             if anchor_early_stop and "anchor_stop_enabled" not in st.session_state:
-                st.toast("Anchor-day early stopping enabled for enhanced 7-day accuracy")
+                st.toast(_t("Anchor-day early stopping enabled for enhanced 7-day accuracy"))
                 st.session_state["anchor_stop_enabled"] = True
             elif not anchor_early_stop and st.session_state.get("anchor_stop_enabled"):
-                st.toast("Using standard early stopping method")
+                st.toast(_t("Using standard early stopping method"))
                 st.session_state["anchor_stop_enabled"] = False
             
             # NEW: Horizon balancing to fix H+1 > H+7 bias
-            st.subheader("Horizon Balancing Configuration")
+            st.subheader(_t("Horizon Balancing Configuration"))
             balance_horizons = st.checkbox(
-                "Balance horizon training", 
+                _t("Balance horizon training"), 
                 value=True, 
-                help="Ensures equal priority for all forecast horizons (H+1 through H+7) during model training"
+                help=_t("Ensures equal priority for all forecast horizons (H+1 through H+7) during model training")
             )
             if balance_horizons and "horizon_balance_enabled" not in st.session_state:
-                st.toast("Horizon balancing enabled - correcting forecast horizon bias")
+                st.toast(_t("Horizon balancing enabled - correcting forecast horizon bias"))
                 st.session_state["horizon_balance_enabled"] = True
             elif not balance_horizons and st.session_state.get("horizon_balance_enabled"):
-                st.toast("Using standard horizon weighting approach")
+                st.toast(_t("Using standard horizon weighting approach"))
                 st.session_state["horizon_balance_enabled"] = False
             
             horizon_strategy = st.selectbox(
-                "Horizon weighting strategy",
-                ["equal", "increasing", "decreasing"],
+                _t("Horizon weighting strategy"),
+                [_t("equal"), _t("increasing"), _t("decreasing")],
                 index=0,
-                help="equal: All horizons get equal priority (recommended) | increasing: Later horizons get more weight | decreasing: Earlier horizons get more weight"
+                help=_t("equal: All horizons get equal priority (recommended) | increasing: Later horizons get more weight | decreasing: Earlier horizons get more weight")
             )
             
             # Show notification when strategy changes
-            if horizon_strategy != st.session_state.get("last_horizon_strategy", "equal"):
-                if horizon_strategy == "increasing":
-                    st.toast("Later horizons (H+7) will receive 4x more weight than earlier horizons (H+1)")
-                elif horizon_strategy == "decreasing":
-                    st.toast("Earlier horizons (H+1) will receive 4x more weight than later horizons (H+7)")
+            if horizon_strategy != st.session_state.get("last_horizon_strategy", _t("equal")):
+                if horizon_strategy == _t("increasing"):
+                    st.toast(_t("Later horizons (H+7) will receive 4x more weight than earlier horizons (H+1)"))
+                elif horizon_strategy == _t("decreasing"):
+                    st.toast(_t("Earlier horizons (H+1) will receive 4x more weight than later horizons (H+7)"))
                 else:
-                    st.toast("All horizons will receive equal weight (1.0x each)")
+                    st.toast(_t("All horizons will receive equal weight (1.0x each)"))
                 st.session_state["last_horizon_strategy"] = horizon_strategy
 
             # ---------------- Training split mode -----------------
@@ -913,7 +1364,7 @@ def main():
 
             train_pressed = st.button(_t("Train on uploaded CSV"))
             if train_pressed:
-                st.toast("Initiating model training process...")
+                st.toast(_t("Initiating model training process..."))
 
         if train_pressed and uploaded_file:
             with st.spinner(_t("Training model – please wait...")):
@@ -995,25 +1446,49 @@ def main():
 
                 if model_choice == "LightGBM":
                     # --------- Optional Optuna tuning ------------------------
+                    _d(f"[MODEL-CONFIG] LightGBM selected, tune_optuna: {tune_optuna}")
                     if tune_optuna:
                         # Check for cached parameters first
                         csv_filename = uploaded_file.name
+                        _d(f"[CACHE-DEBUG] Optuna tuning enabled for CSV: {csv_filename}")
+                        _d(f"[CACHE-DEBUG] use_param_cache: {use_param_cache}")
+                        _d(f"[CACHE-DEBUG] force_reoptimize: {force_reoptimize}")
+                        
                         model_config = {
                             "model_type": "LightGBM",
                             "future_safe": future_safe,
                             "use_quantile": use_quantile,
                             "balance_horizons": balance_horizons,
+                            "horizon_strategy": horizon_strategy,  # Include horizon strategy
                             "anchor_early_stop": anchor_early_stop,
                             "optuna_speed_mode": optuna_speed_mode,
                             "optuna_parallel": optuna_parallel,
                             "optuna_n_jobs": optuna_n_jobs if optuna_parallel else 1,
-                            "train_split": "last30" if use_last_30 else f"pct{train_pct}"
+                            "train_split": "last30" if use_last_30 else f"pct{train_pct}",
+                            "n_trials": n_trials,  # Include number of trials
+                            "conservative_mode": True,  # Always enabled
+                            "uncertainty_estimation": True,  # Always enabled
+                            "stability_feature_boost": 3.0,  # Include feature boost settings
+                            "directional_feature_boost": 2.0,
+                            "n_trees": n_trees,  # Include tree count
+                            "data_rows": len(df),  # Include data size for better cache validation
+                            "horizons": HORIZON_TUPLE  # Include forecast horizons
                         }
                         
                         cached_result = None
                         if use_param_cache and not force_reoptimize:
                             _d("[CACHE] Checking for cached optimal parameters...")
+                            _d(f"[CACHE] CSV filename: {csv_filename}")
+                            _d(f"[CACHE] Model config keys: {list(model_config.keys())}")
+                            _d(f"[CACHE] Model config: {model_config}")
                             cached_result = load_optimal_params(csv_filename, df, model_config)
+                            _d(f"[CACHE] Cache loading result: {cached_result is not None}")
+                            if cached_result:
+                                best_params, best_value, timestamp = cached_result
+                                _d(f"[CACHE] Found cached params: {best_params}")
+                                _d(f"[CACHE] Best value: {best_value}, timestamp: {timestamp}")
+                        else:
+                            _d(f"[CACHE] Skipping cache check - use_param_cache: {use_param_cache}, force_reoptimize: {force_reoptimize}")
                         
                         if cached_result and not force_reoptimize:
                             # Use cached parameters
@@ -1027,22 +1502,64 @@ def main():
                                     "alpha": 0.5,
                                 })
                             
-                            _d(f"[CACHE] Using cached optimal parameters from {timestamp}")
-                            _d(f"[CACHE] Best cached anchor-7d MAE: {best_value:.4f}")
-                            st.info(f"🚀 **Using cached optimal parameters!**\nBest MAE: {best_value:.4f} | Cached: {timestamp}")
+                            _d(f"[CACHE-HIT] Using cached optimal parameters from {timestamp}")
+                            _d(f"[CACHE-HIT] Best cached anchor-7d MAE: {best_value:.4f}")
+                            _d(f"[CACHE-HIT] Cached parameters: {best_params}")
+                            
+                            st.success(f"📦 **{_t('Using cached optimal parameters!')}**\n{_t('Best MAE')}: {best_value:.4f} | {_t('Cached')}: {timestamp}")
+                            
+                            # Enhanced cached parameters display
+                            with st.expander("🔍 **Cached Parameters Details**", expanded=False):
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write("**Optimal Parameters:**")
+                                    for param, value in best_params.items():
+                                        if isinstance(value, float):
+                                            st.write(f"- **{param}**: {value:.4f}")
+                                        else:
+                                            st.write(f"- **{param}**: {value}")
+                                            
+                                with col2:
+                                    st.write("**Cache Information:**")
+                                    st.write(f"- **Best MAE**: {best_value:.4f}")
+                                    st.write(f"- **Cached**: {timestamp}")
+                                    st.write(f"- **CSV File**: {csv_filename}")
+                                    st.write(f"- **Data Shape**: {df.shape}")
+                                    st.write(f"- **Speed Mode**: {optuna_speed_mode}")
+                                    st.write(f"- **Trials**: {n_trials}")
+                                    
+                            st.toast(f"📦 Loaded cached parameters: MAE {best_value:.4f}", icon="📦")
                             
                         else:
                             # Run Optuna optimization
                             try:
                                 import optuna
                                 
+                                # Provide detailed cache miss information
+                                if force_reoptimize:
+                                    _d(f"[CACHE-SKIP] Force re-optimization enabled for {csv_filename}")
+                                    st.info("🔄 **Force re-optimization enabled** - running Optuna despite available cache")
+                                else:
+                                    _d(f"[CACHE-MISS] No cached parameters found for {csv_filename}")
+                                    _d(f"[CACHE-MISS] Configuration: {model_config}")
+                                    st.info("🔍 **No cached parameters found** - running Optuna optimization")
+                                    
+                                # Show current cached parameters for reference
+                                cached_params = list_cached_params()
+                                if cached_params:
+                                    _d(f"[CACHE-INFO] Found {len(cached_params)} cached parameter sets:")
+                                    for key, info in cached_params.items():
+                                        _d(f"[CACHE-INFO] {key}: {info.get('csv_filename')} - MAE: {info.get('best_value', 'N/A')}")
+                                else:
+                                    _d("[CACHE-INFO] No cached parameters available")
+                                
                                 # Clear any previous trial results and show starting message
                                 st.session_state["optuna_trial_results"] = []
                                 with st.container():
-                                    st.info(f"Starting Optuna hyperparameter optimization: {n_trials} trials")
+                                    st.info(_t("Starting Optuna hyperparameter optimization: {} trials").format(n_trials))
                                     if optuna_parallel and optuna_n_jobs > 1:
-                                        st.info(f"Using {optuna_n_jobs} parallel processes for enhanced optimization speed")
-                                    st.info("Live trial results will be displayed below as optimization progresses...")
+                                        st.info(_t("Using {} parallel processes for enhanced optimization speed").format(optuna_n_jobs))
+                                    st.info(_t("Live trial results will be displayed below as optimization progresses..."))
 
                                 # --------------------------------------------------
                                 # Determine optimisation split
@@ -1207,8 +1724,8 @@ def main():
                                         "mae": mean_anchor_mae,
                                         "params": {k: v for k, v in trial.params.items()}
                                     })
-                                    # Keep only last 10 trials to avoid memory issues
-                                    if len(trial_results) > 10:
+                                    # Keep only last 20 trials to show more progress
+                                    if len(trial_results) > 20:
                                         trial_results.pop(0)
                                     
                                     _d(f"[OPTUNA] Trial {trial.number} – Anchor-7d MAE {mean_anchor_mae:.4f}")
@@ -1234,10 +1751,11 @@ def main():
                                     def trial_callback(study, trial):
                                         trial_results = st.session_state.get("optuna_trial_results", [])
                                         
-                                        # Update progress bar and status
-                                        progress = len(trial_results) / n_trials
-                                        progress_bar.progress(progress)
-                                        status_text.text(f"Trial {len(trial_results)}/{n_trials} completed - Current MAE: {trial.value:.4f}")
+                                        # Update progress bar and status using actual trial number
+                                        current_trial = trial.number + 1
+                                        progress = current_trial / n_trials
+                                        progress_bar.progress(min(progress, 1.0))
+                                        status_text.text(f"Trial {current_trial}/{n_trials} completed - Current MAE: {trial.value:.4f}")
                                         
                                         if trial_results:
                                             with trial_placeholder.container():
@@ -1247,8 +1765,8 @@ def main():
                                                 best_trial = min(trial_results, key=lambda x: x['mae'])
                                                 st.success(f"**Best Trial**: #{best_trial['trial']} - MAE: {best_trial['mae']:.4f}")
                                                 
-                                                # Show recent trials table
-                                                recent_trials = trial_results[-5:]  # Last 5 trials
+                                                # Show recent trials table (last 10 trials)
+                                                recent_trials = trial_results[-10:]  # Last 10 trials
                                                 trials_df = pd.DataFrame([
                                                     {
                                                         "Trial": t["trial"],
@@ -1259,7 +1777,7 @@ def main():
                                                     }
                                                     for t in recent_trials
                                                 ])
-                                                st.dataframe(trials_df, use_container_width=True, key=f"trials_{len(trial_results)}")
+                                                st.dataframe(trials_df, use_container_width=True, key=f"trials_{current_trial}")
                                     
                                     study.optimize(objective, n_trials=n_trials, n_jobs=optuna_n_jobs, callbacks=[trial_callback])
                                     st.toast(f"Parallel optimization completed using {optuna_n_jobs} processes")
@@ -1270,10 +1788,11 @@ def main():
                                     def trial_callback(study, trial):
                                         trial_results = st.session_state.get("optuna_trial_results", [])
                                         
-                                        # Update progress bar and status
-                                        progress = len(trial_results) / n_trials
-                                        progress_bar.progress(progress)
-                                        status_text.text(f"Trial {len(trial_results)}/{n_trials} completed - Current MAE: {trial.value:.4f}")
+                                        # Update progress bar and status using actual trial number
+                                        current_trial = trial.number + 1
+                                        progress = current_trial / n_trials
+                                        progress_bar.progress(min(progress, 1.0))
+                                        status_text.text(f"Trial {current_trial}/{n_trials} completed - Current MAE: {trial.value:.4f}")
                                         
                                         if trial_results:
                                             with trial_placeholder.container():
@@ -1283,8 +1802,8 @@ def main():
                                                 best_trial = min(trial_results, key=lambda x: x['mae'])
                                                 st.success(f"**Best Trial**: #{best_trial['trial']} - MAE: {best_trial['mae']:.4f}")
                                                 
-                                                # Show recent trials table
-                                                recent_trials = trial_results[-5:]  # Last 5 trials
+                                                # Show recent trials table (last 10 trials)
+                                                recent_trials = trial_results[-10:]  # Last 10 trials
                                                 trials_df = pd.DataFrame([
                                                     {
                                                         "Trial": t["trial"],
@@ -1295,7 +1814,7 @@ def main():
                                                     }
                                                     for t in recent_trials
                                                 ])
-                                                st.dataframe(trials_df, use_container_width=True, key=f"trials_{len(trial_results)}")
+                                                st.dataframe(trials_df, use_container_width=True, key=f"trials_{current_trial}")
                                     
                                     study.optimize(objective, n_trials=n_trials, callbacks=[trial_callback])
                                 
@@ -1410,25 +1929,25 @@ def main():
                     st.toast("🔬 Training with conservative mode: 3x stability boost + 2x directional boost", icon="🔬")
                     
                     # Enhanced conservative system feedback
-                    with st.expander("Conservative System Status", expanded=True):
-                        st.success("**Conservative Temperature Prediction**: Active")
-                        st.write("**System Configuration:**")
+                    with st.expander(_t("Conservative System Status"), expanded=True):
+                        st.success(f"**{_t('Conservative Temperature Prediction')}**: {_t('Active')}")
+                        st.write(f"**{_t('System Configuration')}:**")
                         col1, col2 = st.columns(2)
                         with col1:
-                            st.info("**Stability Features**: 8 thermal physics features")
-                            st.info("**Stability Boost**: 3.0x feature importance")
-                            st.info("**Uncertainty Samples**: 50 bootstrap samples")
+                            st.info(f"**{_t('Stability Features')}**: {_t('8 thermal physics features')}")
+                            st.info(f"**{_t('Stability Boost')}**: {_t('3.0x feature importance')}")
+                            st.info(f"**{_t('Uncertainty Samples')}**: {_t('50 bootstrap samples')}")
                         with col2:
-                            st.info("**Directional Features**: 2.0x importance boost")
-                            st.info("**Horizon Balancing**: Enabled")
-                            st.info("**Conservative Loss**: Thermal inertia penalties")
+                            st.info(f"**{_t('Directional Features')}**: {_t('2.0x importance boost')}")
+                            st.info(f"**{_t('Horizon Balancing')}**: {_t('Enabled')}")
+                            st.info(f"**{_t('Conservative Loss')}**: {_t('Thermal inertia penalties')}")
                         
-                        st.markdown("**Expected Benefits:**")
-                        st.markdown("""
-                        - **More stable predictions**: Respects grain thermal inertia
-                        - **Reduced aggressive changes**: Conservative temperature evolution
-                        - **Better 7-day accuracy**: Less cumulative error buildup
-                        - **Uncertainty quantification**: Confidence intervals for all predictions
+                        st.markdown(f"**{_t('Expected Benefits')}:**")
+                        st.markdown(f"""
+                        - **{_t('More stable predictions')}**: {_t('Respects grain thermal inertia')}
+                        - **{_t('Reduced aggressive changes')}**: {_t('Conservative temperature evolution')}
+                        - **{_t('Better 7-day accuracy')}**: {_t('Less cumulative error buildup')}
+                        - **{_t('Uncertainty quantification')}**: {_t('Confidence intervals for all predictions')}
                         """)
                         
                         # Real-time training feedback
@@ -1548,61 +2067,61 @@ def main():
                 st.session_state["last_train_pct"] = 100 if train_pct == 100 else train_pct
 
         # Parallel processing status
-        with st.sidebar.expander("Performance Optimization", expanded=False):
+        with st.sidebar.expander(_t("Performance Optimization"), expanded=False):
             try:
                 parallel_info = features.get_parallel_info()
                 if parallel_info['parallel_enabled']:
-                    st.success("**Parallel Processing**: Active")
-                    st.info(f"**Workers**: {parallel_info['max_workers']} of {parallel_info['cpu_count']} CPU cores")
-                    st.info("**Expected Speedup**: 3-5x faster feature engineering")
+                    st.success(f"**{_t('Parallel Processing')}**: {_t('Active')}")
+                    st.info(f"**{_t('Workers')}**: {parallel_info['max_workers']} of {parallel_info['cpu_count']} CPU cores")
+                    st.info(f"**{_t('Expected Speedup')}**: {_t('3-5x faster feature engineering')}")
                     
                     # Show Optuna parallelization status if training is active
                     if 'optuna_parallel' in locals() and optuna_parallel:
                         st.success(f"**Optuna Parallel**: {optuna_n_jobs} processes")
-                        st.info("**Expected Speedup**: 2-4x faster hyperparameter optimization")
+                        st.info(f"**{_t('Expected Speedup')}**: {_t('2-4x faster hyperparameter optimization')}")
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("Enable All Cores"):
+                        if st.button(_t("Enable All Cores")):
                             features.set_parallel_processing(True, parallel_info['cpu_count'])
                             st.rerun()
                     with col2:
-                        if st.button("Disable Parallel"):
+                        if st.button(_t("Disable Parallel")):
                             features.set_parallel_processing(False)
                             st.rerun()
                 else:
-                    st.warning("**Parallel Processing**: Disabled")
-                    if st.button("Enable Parallel Processing"):
+                    st.warning(f"**{_t('Parallel Processing')}**: {_t('Disabled')}")
+                    if st.button(_t("Enable Parallel Processing")):
                         features.set_parallel_processing(True)
                         st.rerun()
             except Exception as e:
-                st.error(f"Could not retrieve parallel processing information: {e}")
+                st.error(_t("Could not retrieve parallel processing information: {}").format(e))
 
         # Parameter cache management
-        with st.sidebar.expander("Parameter Cache", expanded=False):
+        with st.sidebar.expander(_t("Parameter Cache"), expanded=False):
             cached_params = list_cached_params()
             if cached_params:
-                st.write(f"**Cached parameter sets**: {len(cached_params)}")
+                st.write(f"**{_t('Cached parameter sets')}**: {len(cached_params)}")
                 
                 # Show cache details
                 for cache_key, cache_info in cached_params.items():
                     with st.expander(f"{cache_info['csv_filename']} (MAE: {cache_info['best_value']:.3f})", expanded=False):
-                        st.write(f"**Best MAE**: {cache_info['best_value']:.4f}")
-                        st.write(f"**Trials**: {cache_info['n_trials']}")
-                        st.write(f"**Data shape**: {cache_info['data_shape']}")
-                        st.write(f"**Cached**: {cache_info['timestamp']}")
+                        st.write(f"**{_t('Best MAE')}**: {cache_info['best_value']:.4f}")
+                        st.write(f"**{_t('Trials')}**: {cache_info['n_trials']}")
+                        st.write(f"**{_t('Data shape')}**: {cache_info['data_shape']}")
+                        st.write(f"**{_t('Cached')}**: {cache_info['timestamp']}")
                         
                         col1, col2 = st.columns(2)
                         with col1:
-                            if st.button(f"Clear this", key=f"clear_{cache_key}"):
-                                st.toast(f"Clearing cache for {cache_info['csv_filename']}...")
+                            if st.button(_t("Clear this"), key=f"clear_{cache_key}"):
+                                st.toast(_t("Clearing cache for {}...").format(cache_info['csv_filename']))
                                 clear_cache(cache_info['csv_filename'])
                                 st.rerun()
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("Clear all cache"):
-                        st.toast("Clearing all cached parameters...")
+                    if st.button(_t("Clear all cache")):
+                        st.toast(_t("Clearing all cached parameters..."))
                         clear_cache()
                         st.rerun()
                 with col2:
@@ -1704,14 +2223,7 @@ def main():
                                 _d(f"[UNCERTAINTY] Model uses uncertainty estimation (n_bootstrap={getattr(mdl, 'n_bootstrap_samples', 50)})")
                                 st.toast(f"🔬 {mdl_name}: Uncertainty estimation active with {getattr(mdl, 'n_bootstrap_samples', 50)} bootstrap samples", icon="🔬")
                                 
-                                # Check for conservative mode
-                                if hasattr(mdl, 'conservative_mode') and mdl.conservative_mode:
-                                    st.success(f"🧊 **{mdl_name}**: Conservative Temperature System ACTIVE")
-                                    st.info(f"📊 Stability boost: {getattr(mdl, 'stability_feature_boost', 3.0)}x | "
-                                           f"Directional boost: {getattr(mdl, 'directional_feature_boost', 2.0)}x")
-                                    st.toast(f"🧊 {mdl_name}: Conservative mode - predictions will be more stable", icon="🧊")
-                                else:
-                                    st.warning(f"⚠️ **{mdl_name}**: Conservative mode disabled - predictions may be aggressive")
+
                             else:
                                 _d(f"[UNCERTAINTY] Model uncertainty estimation disabled - point predictions only")
                                 st.toast(f"⚠️ {mdl_name}: No uncertainty estimation - point predictions only", icon="⚠️")
@@ -2469,47 +2981,7 @@ def render_evaluation(model_name: str):
             mdl = load_trained_model(model_name)
             
             # Conservative system status display
-            if hasattr(mdl, 'conservative_mode') and mdl.conservative_mode:
-                st.success("🧊 **Conservative Temperature System**: ✅ ACTIVE")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.info(f"**Stability Boost**: {getattr(mdl, 'stability_feature_boost', 3.0)}x")
-                with col2:
-                    st.info(f"**Directional Boost**: {getattr(mdl, 'directional_feature_boost', 2.0)}x") 
-                with col3:
-                    st.info(f"**Bootstrap Samples**: {getattr(mdl, 'n_bootstrap_samples', 50)}")
-                
-                # Conservative system features breakdown
-                with st.expander("🔍 Conservative System Features (Click to expand)", expanded=False):
-                    st.markdown("**🧊 Thermal Physics Features:**")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("""
-                        • **Thermal Inertia**: Models temperature resistance to change
-                        • **Stability Index**: Measures temperature consistency
-                        • **Change Resistance**: Quantifies fluctuation dampening
-                        • **Equilibrium Temperature**: Natural settling point per sensor
-                        """)
-                    with col2:
-                        st.markdown("""
-                        • **Mean Reversion**: Tendency to return to equilibrium  
-                        • **Historical Stability**: Long-term stability patterns
-                        • **Dampening Factor**: Dynamic change dampening
-                        • **Progressive Penalties**: Increasing constraints for longer horizons
-                        """)
-                        
-                    st.markdown("**🎯 How This Improves Predictions:**")
-                    st.markdown("""
-                    - **Reduces aggressive changes**: Predictions respect thermal inertia
-                    - **Improves 7-day accuracy**: Less cumulative error buildup
-                    - **Sensor-specific learning**: Each probe learns its stability characteristics
-                    - **Physical realism**: Temperature evolution follows grain physics
-                    """)
-                
-            else:
-                st.warning("⚠️ **Conservative Mode**: ❌ DISABLED - Predictions may be overly aggressive")
-                st.info("💡 Enable conservative mode in model training to get more stable predictions")
+
                 
             # Uncertainty estimation status
             if hasattr(mdl, 'uncertainty_estimation') and mdl.uncertainty_estimation:
@@ -2830,13 +3302,7 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
                 _d(f"[FORECAST-UNCERTAINTY] Applied uncertainty estimation during forecasting (n_bootstrap={getattr(mdl, 'n_bootstrap_samples', 50)})")
                 st.toast(f"🔮 Forecast with uncertainty: {getattr(mdl, 'n_bootstrap_samples', 50)} bootstrap samples", icon="🔮")
                 
-                # Check for conservative mode during forecasting
-                if hasattr(mdl, 'conservative_mode') and mdl.conservative_mode:
-                    st.success("🧊 **Conservative Forecasting**: Thermal stability features active")
-                    st.info(f"🎯 Stability-enhanced predictions with {getattr(mdl, 'stability_feature_boost', 3.0)}x thermal physics boost")
-                    st.toast("🧊 Conservative forecast: More stable temperature evolution expected", icon="🧊")
-                else:
-                    st.warning("⚠️ Conservative mode disabled during forecasting")
+
             else:
                 _d(f"[FORECAST-UNCERTAINTY] No uncertainty estimation - point forecast only")
                 st.toast("⚠️ Forecast without uncertainty - no confidence intervals", icon="⚠️")
