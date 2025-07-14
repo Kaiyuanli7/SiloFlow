@@ -463,16 +463,28 @@ class GranaryDataPipeline:
         )
         
         try:
+            # Check GPU availability
+            try:
+                from granarypredict.multi_lgbm import detect_gpu_availability
+                gpu_config = detect_gpu_availability()
+                gpu_available = gpu_config['available']
+                logger.info(f"GPU availability check: {gpu_available}")
+            except Exception as e:
+                logger.warning(f"Could not detect GPU availability: {e}")
+                gpu_available = False
+            
             # Create finder model to determine optimal iterations
             finder = MultiLGBMRegressor(
                 base_params=base_params,
                 upper_bound_estimators=2000,
                 early_stopping_rounds=50,
                 uncertainty_estimation=True,
-                n_bootstrap_samples=50,
+                n_bootstrap_samples=100,  # Increased from 50 for better uncertainty estimation
                 conservative_mode=True,
                 directional_feature_boost=2.0,
                 stability_feature_boost=3.0,
+                use_gpu=gpu_available,  # NEW: Enable GPU acceleration only if available
+                gpu_optimization=True,  # NEW: Auto-optimize GPU parameters
             )
             
             logger.info("Finding optimal iterations with internal 95/5 split...")
@@ -499,10 +511,12 @@ class GranaryDataPipeline:
                 upper_bound_estimators=best_iterations,
                 early_stopping_rounds=0,  # No early stopping for final model
                 uncertainty_estimation=True,
-                n_bootstrap_samples=50,
+                n_bootstrap_samples=100,  # Increased from 50 for better uncertainty estimation
                 conservative_mode=True,
                 directional_feature_boost=2.0,
                 stability_feature_boost=3.0,
+                use_gpu=gpu_available,  # NEW: Enable GPU acceleration only if available
+                gpu_optimization=True,  # NEW: Auto-optimize GPU parameters
             )
             
             logger.info("Training final model on 100% of data...")
@@ -594,7 +608,7 @@ class GranaryDataPipeline:
         def objective(trial):
             params = {
                 "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.15, log=True),
-                "max_depth": trial.suggest_int("max_depth", 3, 10),
+                "max_depth": trial.suggest_int("max_depth", 3, 20),  # Increased from 10 to 20
                 "num_leaves": trial.suggest_int("num_leaves", 16, 128),
                 "subsample": trial.suggest_float("subsample", 0.5, 1.0),
                 "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 1.0),

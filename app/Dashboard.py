@@ -88,7 +88,7 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "Use performance optimizations: 2-fold CV, lower tree limits, aggressive early stopping": "使用性能优化：2 折交叉验证、较低的树限制、积极的提前停止",
     "Run multiple Optuna trials in parallel for 2-4x faster optimization": "并行运行多个 Optuna 试验，优化速度提高 2-4 倍",
     "Number of parallel processes (max: {} CPU cores)": "并行进程数（最大：{} 个 CPU 核心）",
-    "Automatically save/load optimal parameters to skip redundant Optuna optimization": "自动保存/加载最优参数以跳过冗余的 Optuna 优化",
+    "Automatically save/load optimal parameters from previous Optuna runs. Works even when Optuna is disabled!": "自动保存/加载先前 Optuna 运行的最优参数。即使禁用 Optuna 也能工作！",
     "Run Optuna even if cached parameters exist": "即使存在缓存参数也运行 Optuna",
     "Clear all cached parameters": "清除所有缓存的参数",
     "Show detailed internal processing messages": "显示详细的内部处理消息",
@@ -165,6 +165,8 @@ _TRANSLATIONS_ZH: dict[str, str] = {
     "Parameter cache cleared!": "参数缓存已清除！",
     "Clearing cache for {}...": "正在清除 {} 的缓存...",
     "Refreshing cache view...": "正在刷新缓存视图...",
+    "Using default parameters - enable Optuna or use parameter cache for optimized settings": "使用默认参数 - 启用 Optuna 或使用参数缓存以获得优化设置",
+    "Force re-optimization enabled but Optuna is disabled - using default parameters": "强制重新优化已启用但 Optuna 已禁用 - 使用默认参数",
     
     # Tab labels
     "Summary": "摘要",
@@ -1173,6 +1175,9 @@ def main():
             tune_optuna = False
             use_quantile = False
             n_trials = 0
+            optuna_speed_mode = False  # Initialize to prevent UnboundLocalError
+            optuna_parallel = False  # Initialize to prevent UnboundLocalError
+            optuna_n_jobs = 1  # Initialize to prevent UnboundLocalError
             
             if model_choice == "LightGBM":
                 st.caption(_t("LightGBM uses early stopping; optimal number of trees will be selected automatically."))
@@ -1194,6 +1199,59 @@ def main():
                 elif not use_quantile and st.session_state.get("quantile_enabled"):
                     st.toast(_t("Using standard regression objective"))
                     st.session_state["quantile_enabled"] = False
+                
+                # Parameter cache controls (always available)
+                st.subheader(f"📦 {_t('Parameter Cache')}")
+                use_param_cache = st.checkbox(
+                    _t("Use parameter cache"), 
+                    value=True, 
+                    help=_t("Automatically save/load optimal parameters from previous Optuna runs. Works even when Optuna is disabled!")
+                )
+                    
+                col_cache1, col_cache2 = st.columns(2)
+                with col_cache1:
+                    force_reoptimize = st.checkbox(
+                        _t("Force re-optimization"), 
+                        value=False, 
+                        help=_t("Run Optuna even if cached parameters exist")
+                    )
+                with col_cache2:
+                    if st.button(_t("Clear cache"), help=_t("Clear all cached parameters")):
+                        st.toast(f"🧽 {_t('Clearing parameter cache...')}", icon="🧽")
+                        clear_cache()
+                        st.success(_t("Parameter cache cleared!"))
+                
+                # Show cached parameter info with debugging
+                cached_params = list_cached_params()
+                if cached_params:
+                    st.write(f"📋 **{_t('Cached parameters')}**: {len(cached_params)} {_t('sets available')}")
+                    
+                    # Debug: Show cache details for current CSV
+                    if st.checkbox("🔍 Show cache debugging info", value=False):
+                        csv_filename = uploaded_file.name if uploaded_file else "No file"
+                        st.write(f"**Debug Info for {csv_filename}:**")
+                        
+                        # Show all cached files
+                        for key, info in cached_params.items():
+                            cached_csv = info.get('csv_filename', 'Unknown')
+                            cached_mae = info.get('best_value', 'N/A')
+                            cached_trials = info.get('n_trials', 'N/A')
+                            cached_shape = info.get('data_shape', 'N/A')
+                            
+                            match_indicator = "✅" if cached_csv == csv_filename else "❌"
+                            st.write(f"{match_indicator} **{cached_csv}** - MAE: {cached_mae}, Trials: {cached_trials}, Shape: {cached_shape}")
+                        
+                        # Show current configuration
+                        if uploaded_file:
+                            current_config = {
+                                "quantile_mode": use_quantile,
+                                "speed_mode": optuna_speed_mode if tune_optuna else "N/A",
+                                "n_trials": n_trials if tune_optuna else "N/A",
+                                "cache_enabled": use_param_cache,
+                                "force_reopt": force_reoptimize
+                            }
+                            st.write(f"**Current Config**: {current_config}")
+                
                 if tune_optuna:
                     n_trials = st.slider(_t("Optuna trials"), 20, 200, 50, step=10)
                     optuna_speed_mode = st.checkbox(
@@ -1201,6 +1259,55 @@ def main():
                         value=True, 
                         help=_t("Use performance optimizations: 2-fold CV, lower tree limits, aggressive early stopping")
                     )
+                    
+                    # NEW: GPU Acceleration Settings (moved before parallel settings)
+                    st.markdown(f"**🚀 {_t('GPU Acceleration')}**")
+                    
+                    # Check GPU availability first
+                    try:
+                        from granarypredict.multi_lgbm import detect_gpu_availability
+                        gpu_config = detect_gpu_availability()
+                        gpu_available = gpu_config['available']
+                        
+                        if gpu_available:
+                            st.success(f"✅ {_t('GPU detected and available for acceleration')}")
+                        else:
+                            st.warning(f"⚠️ {_t('No GPU detected - will use CPU acceleration')}")
+                    except Exception as e:
+                        st.warning(f"⚠️ {_t('Could not detect GPU availability')}: {str(e)[:50]}...")
+                        gpu_available = False
+                    
+                    use_gpu_optuna = st.checkbox(
+                        _t("Enable GPU acceleration"),
+                        value=gpu_available,  # Default to True only if GPU is available
+                        help=_t("Use GPU acceleration for faster LightGBM training during Optuna optimization"),
+                        disabled=not gpu_available  # Disable if no GPU available
+                    )
+                    
+                    if use_gpu_optuna and gpu_available:
+                        gpu_optimization_mode = st.selectbox(
+                            _t("GPU Optimization Mode"),
+                            ["auto", "balanced", "speed", "accuracy"],
+                            help=_t("Auto: Smart optimization based on dataset size. Balanced: Speed/accuracy trade-off. Speed: Maximum speed. Accuracy: Maximum precision.")
+                        )
+                        
+                        gpu_device_id = st.slider(
+                            _t("GPU Device ID"),
+                            0, 3, 0, step=1,
+                            help=_t("Select which GPU device to use (0 = first GPU)")
+                        )
+                        
+                        gpu_use_double_precision = st.checkbox(
+                            _t("Use double precision"),
+                            value=True,
+                            help=_t("Use double precision for better accuracy (slower but more precise)")
+                        )
+                    else:
+                        gpu_optimization_mode = "cpu"
+                        gpu_device_id = 0
+                        gpu_use_double_precision = True
+                        if not gpu_available:
+                            st.info(f"💻 {_t('Using CPU acceleration - no GPU available')}")
                     
                     # Parallel Optuna optimization settings
                     st.markdown(f"**⚡ {_t('Parallel Optimization')}**")
@@ -1211,82 +1318,78 @@ def main():
                     )
                     
                     if optuna_parallel:
+                        # NEW: Smart parallel process recommendation based on GPU usage
+                        if use_gpu_optuna and gpu_available:
+                            # With GPU: Can use more parallel processes since GPU handles model training
+                            max_processes = min(8, multiprocessing.cpu_count())
+                            default_processes = min(4, multiprocessing.cpu_count())
+                            help_text = _t("With GPU acceleration: Can use more parallel processes (GPU handles model training)")
+                        else:
+                            # Without GPU: Be more conservative since CPU cores are shared with LightGBM
+                            max_processes = min(4, multiprocessing.cpu_count())
+                            default_processes = min(2, multiprocessing.cpu_count())
+                            help_text = _t("Without GPU: Conservative setting to avoid overwhelming CPU cores")
+                        
                         optuna_n_jobs = st.slider(
-                            _t("Parallel jobs"), 
-                            1, min(multiprocessing.cpu_count(), 8), 
-                            min(4, multiprocessing.cpu_count()), 
-                            step=1,
-                            help=_t("Number of parallel processes (max: {} CPU cores)").format(multiprocessing.cpu_count())
+                            _t("Number of parallel processes"), 
+                            2, max_processes, default_processes, step=1,
+                            help=help_text
                         )
-                        if optuna_n_jobs != st.session_state.get("last_optuna_jobs", 4):
-                            st.toast(_t("Optuna configured for {} parallel processes").format(optuna_n_jobs))
-                            st.session_state["last_optuna_jobs"] = optuna_n_jobs
-                            
+                        
+                        # NEW: Smart LightGBM threading configuration
+                        if use_gpu_optuna and gpu_available:
+                            # GPU mode: Use fewer CPU threads per model to free up cores for Optuna
+                            lgbm_n_jobs = st.selectbox(
+                                _t("LightGBM CPU threads per model"),
+                                [1, 2, 4],
+                                index=1,  # Default to 2
+                                help=_t("With GPU: Use fewer CPU threads to free up cores for parallel Optuna trials")
+                            )
+                        else:
+                            # CPU mode: Use all available cores for each model
+                            lgbm_n_jobs = st.selectbox(
+                                _t("LightGBM CPU threads per model"),
+                                [1, 2, 4, -1],
+                                index=3,  # Default to -1 (all cores)
+                                help=_t("Without GPU: Use all CPU cores for maximum model training speed")
+                            )
+                        
                         # Performance expectations
-                        st.caption(f"**{_t('Expected Speedup')}**: {_t('Approximately {}x faster optimization').format(min(optuna_n_jobs, 4))}")
-                        st.caption(f"**{_t('Recommended for')}**: {n_trials}+ {_t('trials with 4+ CPU cores available')}")
+                        if use_gpu_optuna and gpu_available:
+                            expected_speedup = min(optuna_n_jobs * 2, 8)  # GPU provides additional speedup
+                            st.caption(f"**{_t('Expected Speedup')}**: {_t('Approximately {}x faster optimization').format(expected_speedup)}")
+                            st.caption(f"**{_t('GPU + Parallel')}**: {_t('GPU acceleration + {} parallel processes').format(optuna_n_jobs)}")
+                        else:
+                            expected_speedup = min(optuna_n_jobs, 4)
+                            st.caption(f"**{_t('Expected Speedup')}**: {_t('Approximately {}x faster optimization').format(expected_speedup)}")
+                            st.caption(f"**{_t('Recommended for')}**: {n_trials}+ {_t('trials with 4+ CPU cores available')}")
                     else:
                         optuna_n_jobs = 1
+                        lgbm_n_jobs = -1  # Use all cores for single-threaded Optuna
                         st.caption(_t("Sequential mode: Recommended for small trial counts or debugging"))
                     
-                    # Optuna parameter caching controls
-                    st.subheader(f"📦 {_t('Parameter Cache')}")
-                    use_param_cache = st.checkbox(
-                        _t("Use parameter cache"), 
-                        value=True, 
-                        help=_t("Automatically save/load optimal parameters to skip redundant Optuna optimization")
-                    )
                     
-                    col_cache1, col_cache2 = st.columns(2)
-                    with col_cache1:
-                        force_reoptimize = st.checkbox(
-                            _t("Force re-optimization"), 
-                            value=False, 
-                            help=_t("Run Optuna even if cached parameters exist")
-                        )
-                    with col_cache2:
-                        if st.button(_t("Clear cache"), help=_t("Clear all cached parameters")):
-                            st.toast(f"🧽 {_t('Clearing parameter cache...')}", icon="🧽")
-                            clear_cache()
-                            st.success(_t("Parameter cache cleared!"))
-                    
-                    # Show cached parameter info with debugging
-                    cached_params = list_cached_params()
-                    if cached_params:
-                        st.write(f"📋 **{_t('Cached parameters')}**: {len(cached_params)} {_t('sets available')}")
-                        
-                        # Debug: Show cache details for current CSV
-                        if st.checkbox("🔍 Show cache debugging info", value=False):
-                            csv_filename = uploaded_file.name if uploaded_file else "No file"
-                            st.write(f"**Debug Info for {csv_filename}:**")
-                            
-                            # Show all cached files
-                            for key, info in cached_params.items():
-                                cached_csv = info.get('csv_filename', 'Unknown')
-                                cached_mae = info.get('best_value', 'N/A')
-                                cached_trials = info.get('n_trials', 'N/A')
-                                cached_shape = info.get('data_shape', 'N/A')
-                                
-                                match_indicator = "✅" if cached_csv == csv_filename else "❌"
-                                st.write(f"{match_indicator} **{cached_csv}** - MAE: {cached_mae}, Trials: {cached_trials}, Shape: {cached_shape}")
-                            
-                            # Show current configuration
-                            if uploaded_file:
-                                current_config = {
-                                    "quantile_mode": use_quantile,
-                                    "speed_mode": optuna_speed_mode,
-                                    "n_trials": n_trials,
-                                    "cache_enabled": use_param_cache,
-                                    "force_reopt": force_reoptimize
-                                }
-                                st.write(f"**Current Config**: {current_config}")
             else:
                 n_trees = st.slider(_t("Iterations / Trees"), 100, 1000, 300, step=100)
                 optuna_speed_mode = False  # Default when Optuna is disabled
                 optuna_parallel = False  # Default when Optuna is disabled
                 optuna_n_jobs = 1  # Default when Optuna is disabled
-                use_param_cache = False  # Default when Optuna is disabled
-                force_reoptimize = False  # Default when Optuna is disabled
+                n_trials = 50  # Default when Optuna is disabled
+                
+                # NEW: GPU settings when Optuna is disabled
+                use_gpu_optuna = False  # Default to False when Optuna is disabled
+                gpu_optimization_mode = "cpu"
+                gpu_device_id = 0
+                gpu_use_double_precision = True
+                lgbm_n_jobs = -1  # Use all cores for non-Optuna training
+                
+                # Check GPU availability even when Optuna is disabled
+                try:
+                    from granarypredict.multi_lgbm import detect_gpu_availability
+                    gpu_config = detect_gpu_availability()
+                    gpu_available = gpu_config['available']
+                except Exception as e:
+                    gpu_available = False
             future_safe = st.checkbox(_t("Future-safe (exclude env vars)"), value=False)
             if future_safe and "future_safe_enabled" not in st.session_state:
                 st.toast(_t("Future-safe mode enabled - environmental variables excluded"))
@@ -1430,6 +1533,7 @@ def main():
                     subsample=0.9,
                     colsample_bytree=0.7,
                     min_child_samples=20,
+                    n_jobs=lgbm_n_jobs if 'lgbm_n_jobs' in locals() else -1,  # NEW: Use configured threading
                 )
 
                 # Apply quantile objective if selected
@@ -1445,92 +1549,107 @@ def main():
                 base_mdl = None
 
                 if model_choice == "LightGBM":
-                    # --------- Optional Optuna tuning ------------------------
+                    # NEW: Ensure GPU variables are always defined for LightGBM
+                    if 'use_gpu_optuna' not in locals():
+                        use_gpu_optuna = False
+                    if 'gpu_available' not in locals():
+                        try:
+                            from granarypredict.multi_lgbm import detect_gpu_availability
+                            gpu_config = detect_gpu_availability()
+                            gpu_available = gpu_config['available']
+                        except Exception as e:
+                            gpu_available = False
+                    if 'gpu_optimization_mode' not in locals():
+                        gpu_optimization_mode = "cpu"
+                    
+                    # --------- Always check for cached parameters first ------------------------
+                    csv_filename = uploaded_file.name
                     _d(f"[MODEL-CONFIG] LightGBM selected, tune_optuna: {tune_optuna}")
-                    if tune_optuna:
-                        # Check for cached parameters first
-                        csv_filename = uploaded_file.name
-                        _d(f"[CACHE-DEBUG] Optuna tuning enabled for CSV: {csv_filename}")
-                        _d(f"[CACHE-DEBUG] use_param_cache: {use_param_cache}")
-                        _d(f"[CACHE-DEBUG] force_reoptimize: {force_reoptimize}")
-                        
-                        model_config = {
-                            "model_type": "LightGBM",
-                            "future_safe": future_safe,
-                            "use_quantile": use_quantile,
-                            "balance_horizons": balance_horizons,
-                            "horizon_strategy": horizon_strategy,  # Include horizon strategy
-                            "anchor_early_stop": anchor_early_stop,
-                            "optuna_speed_mode": optuna_speed_mode,
-                            "optuna_parallel": optuna_parallel,
-                            "optuna_n_jobs": optuna_n_jobs if optuna_parallel else 1,
-                            "train_split": "last30" if use_last_30 else f"pct{train_pct}",
-                            "n_trials": n_trials,  # Include number of trials
-                            "conservative_mode": True,  # Always enabled
-                            "uncertainty_estimation": True,  # Always enabled
-                            "stability_feature_boost": 3.0,  # Include feature boost settings
-                            "directional_feature_boost": 2.0,
-                            "n_trees": n_trees,  # Include tree count
-                            "data_rows": len(df),  # Include data size for better cache validation
-                            "horizons": HORIZON_TUPLE  # Include forecast horizons
-                        }
-                        
-                        cached_result = None
-                        if use_param_cache and not force_reoptimize:
-                            _d("[CACHE] Checking for cached optimal parameters...")
-                            _d(f"[CACHE] CSV filename: {csv_filename}")
-                            _d(f"[CACHE] Model config keys: {list(model_config.keys())}")
-                            _d(f"[CACHE] Model config: {model_config}")
-                            cached_result = load_optimal_params(csv_filename, df, model_config)
-                            _d(f"[CACHE] Cache loading result: {cached_result is not None}")
-                            if cached_result:
-                                best_params, best_value, timestamp = cached_result
-                                _d(f"[CACHE] Found cached params: {best_params}")
-                                _d(f"[CACHE] Best value: {best_value}, timestamp: {timestamp}")
-                        else:
-                            _d(f"[CACHE] Skipping cache check - use_param_cache: {use_param_cache}, force_reoptimize: {force_reoptimize}")
-                        
-                        if cached_result and not force_reoptimize:
-                            # Use cached parameters
+                    _d(f"[CACHE-DEBUG] Checking cache for CSV: {csv_filename}")
+                    _d(f"[CACHE-DEBUG] use_param_cache: {use_param_cache}")
+                    _d(f"[CACHE-DEBUG] force_reoptimize: {force_reoptimize}")
+                    
+                    # Create model configuration for cache lookup
+                    model_config = {
+                        "model_type": "LightGBM",
+                        "future_safe": future_safe,
+                        "use_quantile": use_quantile,
+                        "balance_horizons": balance_horizons,
+                        "horizon_strategy": horizon_strategy,  # Include horizon strategy
+                        "anchor_early_stop": anchor_early_stop,
+                        "optuna_speed_mode": optuna_speed_mode,
+                        "optuna_parallel": optuna_parallel,
+                        "optuna_n_jobs": optuna_n_jobs if optuna_parallel else 1,
+                        "train_split": "last30" if use_last_30 else f"pct{train_pct}",
+                        "n_trials": n_trials,  # Include number of trials
+                        "conservative_mode": True,  # Always enabled
+                        "uncertainty_estimation": True,  # Always enabled
+                        "stability_feature_boost": 3.0,  # Include feature boost settings
+                        "directional_feature_boost": 2.0,
+                        "n_trees": n_trees,  # Include tree count
+                        "data_rows": len(df),  # Include data size for better cache validation
+                        "horizons": HORIZON_TUPLE  # Include forecast horizons
+                    }
+                    
+                    # Check for cached parameters (regardless of Optuna setting)
+                    cached_result = None
+                    if use_param_cache and not force_reoptimize:
+                        _d("[CACHE] Checking for cached optimal parameters...")
+                        _d(f"[CACHE] CSV filename: {csv_filename}")
+                        _d(f"[CACHE] Model config keys: {list(model_config.keys())}")
+                        _d(f"[CACHE] Model config: {model_config}")
+                        cached_result = load_optimal_params(csv_filename, df, model_config)
+                        _d(f"[CACHE] Cache loading result: {cached_result is not None}")
+                        if cached_result:
                             best_params, best_value, timestamp = cached_result
-                            base_params.update(best_params)
-                            
-                            # Keep quantile objective if it was selected
-                            if use_quantile:
-                                base_params.update({
-                                    "objective": "quantile",
-                                    "alpha": 0.5,
-                                })
-                            
-                            _d(f"[CACHE-HIT] Using cached optimal parameters from {timestamp}")
-                            _d(f"[CACHE-HIT] Best cached anchor-7d MAE: {best_value:.4f}")
-                            _d(f"[CACHE-HIT] Cached parameters: {best_params}")
-                            
-                            st.success(f"📦 **{_t('Using cached optimal parameters!')}**\n{_t('Best MAE')}: {best_value:.4f} | {_t('Cached')}: {timestamp}")
-                            
-                            # Enhanced cached parameters display
-                            with st.expander("🔍 **Cached Parameters Details**", expanded=False):
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.write("**Optimal Parameters:**")
-                                    for param, value in best_params.items():
-                                        if isinstance(value, float):
-                                            st.write(f"- **{param}**: {value:.4f}")
-                                        else:
-                                            st.write(f"- **{param}**: {value}")
-                                            
-                                with col2:
-                                    st.write("**Cache Information:**")
-                                    st.write(f"- **Best MAE**: {best_value:.4f}")
-                                    st.write(f"- **Cached**: {timestamp}")
-                                    st.write(f"- **CSV File**: {csv_filename}")
-                                    st.write(f"- **Data Shape**: {df.shape}")
-                                    st.write(f"- **Speed Mode**: {optuna_speed_mode}")
-                                    st.write(f"- **Trials**: {n_trials}")
-                                    
-                            st.toast(f"📦 Loaded cached parameters: MAE {best_value:.4f}", icon="📦")
-                            
-                        else:
+                            _d(f"[CACHE] Found cached params: {best_params}")
+                            _d(f"[CACHE] Best value: {best_value}, timestamp: {timestamp}")
+                    else:
+                        _d(f"[CACHE] Skipping cache check - use_param_cache: {use_param_cache}, force_reoptimize: {force_reoptimize}")
+                    
+                    # Use cached parameters if available
+                    if cached_result and not force_reoptimize:
+                        # Use cached parameters
+                        best_params, best_value, timestamp = cached_result
+                        base_params.update(best_params)
+                        
+                        # Keep quantile objective if it was selected
+                        if use_quantile:
+                            base_params.update({
+                                "objective": "quantile",
+                                "alpha": 0.5,
+                            })
+                        
+                        _d(f"[CACHE-HIT] Using cached optimal parameters from {timestamp}")
+                        _d(f"[CACHE-HIT] Best cached anchor-7d MAE: {best_value:.4f}")
+                        _d(f"[CACHE-HIT] Cached parameters: {best_params}")
+                        
+                        st.success(f"📦 **{_t('Using cached optimal parameters!')}**\n{_t('Best MAE')}: {best_value:.4f} | {_t('Cached')}: {timestamp}")
+                        
+                        # Enhanced cached parameters display
+                        with st.expander("🔍 **Cached Parameters Details**", expanded=False):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write("**Optimal Parameters:**")
+                                for param, value in best_params.items():
+                                    if isinstance(value, float):
+                                        st.write(f"- **{param}**: {value:.4f}")
+                                    else:
+                                        st.write(f"- **{param}**: {value}")
+                                        
+                            with col2:
+                                st.write("**Cache Information:**")
+                                st.write(f"- **Best MAE**: {best_value:.4f}")
+                                st.write(f"- **Cached**: {timestamp}")
+                                st.write(f"- **CSV File**: {csv_filename}")
+                                st.write(f"- **Data Shape**: {df.shape}")
+                                st.write(f"- **Speed Mode**: {optuna_speed_mode}")
+                                st.write(f"- **Trials**: {n_trials}")
+                                
+                        st.toast(f"📦 Loaded cached parameters: MAE {best_value:.4f}", icon="📦")
+                        
+                    # If no cached parameters found, decide whether to run Optuna or use defaults
+                    elif tune_optuna:
                             # Run Optuna optimization
                             try:
                                 import optuna
@@ -1595,14 +1714,50 @@ def main():
                                 def objective(trial):
                                     params = {
                                         "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.15, log=True),
-                                        "max_depth": trial.suggest_int("max_depth", 3, 10),
-                                        "num_leaves": trial.suggest_int("num_leaves", 16, 128),
+                                        "max_depth": trial.suggest_int("max_depth", 3, 20),  # Increased from 10 to 20
+                                        "num_leaves": trial.suggest_int("num_leaves", 16, 256),  # Increased from 128
                                         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
                                         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 1.0),
-                                        "min_child_samples": trial.suggest_int("min_child_samples", 5, 300),
+                                        "min_child_samples": trial.suggest_int("min_child_samples", 5, 500),  # Increased from 300
                                         "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 2.0),
                                         "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 2.0),
+                                        "max_bin": trial.suggest_int("max_bin", 255, 511),  # For better precision with deep trees
+                                        "n_jobs": lgbm_n_jobs,  # NEW: Use configured threading
                                     }
+                                    
+                                    # NEW: GPU Acceleration Parameters
+                                    if use_gpu_optuna and gpu_available:
+                                        # Add GPU device parameters
+                                        params.update({
+                                            "device": "gpu",
+                                            "gpu_platform_id": 0,
+                                            "gpu_device_id": gpu_device_id,
+                                            "gpu_use_dp": gpu_use_double_precision,
+                                        })
+                                        
+                                        # Optimize GPU-specific parameters based on mode
+                                        if gpu_optimization_mode == "auto":
+                                            # Auto-optimize based on dataset size
+                                            dataset_size = len(X_opt_tr)
+                                            if dataset_size > 50000:
+                                                params.update({
+                                                    "gpu_use_dp": False,  # Use single precision for large datasets
+                                                    "max_bin": 255,  # Smaller bins for GPU efficiency
+                                                })
+                                        elif gpu_optimization_mode == "speed":
+                                            params.update({
+                                                "gpu_use_dp": False,  # Single precision for speed
+                                                "max_bin": 255,  # Smaller bins
+                                                "feature_fraction": 0.8,  # Reduce feature sampling
+                                            })
+                                        elif gpu_optimization_mode == "accuracy":
+                                            params.update({
+                                                "gpu_use_dp": True,  # Double precision for accuracy
+                                                "max_bin": 511,  # Larger bins for precision
+                                            })
+                                    else:
+                                        # CPU fallback
+                                        params["device"] = "cpu"
                                     
                                     # Apply quantile objective if selected
                                     if use_quantile:
@@ -1641,6 +1796,8 @@ def main():
                                             directional_feature_boost=2.0,  # 2x boost for directional features
                                             conservative_mode=True,  # Enable conservative predictions
                                             stability_feature_boost=3.0,  # 3x boost for stability features
+                                            use_gpu=(use_gpu_optuna and gpu_available),  # NEW: GPU acceleration with availability check
+                                            gpu_optimization=(gpu_optimization_mode == "auto"),  # NEW: Auto-optimization
                                         )
                                         
                                         # Generate anchor-day evaluation on this fold
@@ -1898,6 +2055,16 @@ def main():
                             except Exception as exc:
                                 _d(f"[OPTUNA] Tuning failed or Optuna not installed: {exc}")
                                 st.warning(f"Optuna optimization failed: {exc}")
+                    
+                    # No cached parameters and Optuna disabled - use default parameters
+                    else:
+                        if not cached_result:
+                            _d(f"[MODEL-CONFIG] No cached parameters found and Optuna disabled - using default parameters")
+                            _d(f"[MODEL-CONFIG] Default base_params: {base_params}")
+                            if force_reoptimize:
+                                st.info("🔄 **Force re-optimization enabled** but Optuna is disabled - using default parameters")
+                            else:
+                                st.info("📋 **Using default parameters** - enable Optuna or use parameter cache for optimized settings")
 
                     # ================================================================
                     # PERFORMANCE OPTIMIZATIONS FOR 7-DAY FORECASTING
@@ -1916,14 +2083,16 @@ def main():
                         upper_bound_estimators=n_trees,
                         early_stopping_rounds=main_early_stop,
                         uncertainty_estimation=True,
-                        n_bootstrap_samples=50,
+                        n_bootstrap_samples=100,  # Increased from 50 for better uncertainty estimation
                         directional_feature_boost=2.0,  # 2x boost for directional features
                         conservative_mode=True,  # Enable conservative predictions
                         stability_feature_boost=3.0,  # 3x boost for stability features
+                        use_gpu=(use_gpu_optuna and gpu_available),  # NEW: GPU acceleration with availability check
+                        gpu_optimization=(gpu_optimization_mode == "auto"),  # NEW: Auto-optimization
                     )
                     use_wrapper = False
                     _d(f"[TRAIN] LightGBM initialised – upper_bound={n_trees}, early_stop={main_early_stop}, base_params={base_params}")
-                    _d(f"[TRAIN-UNCERTAINTY] Uncertainty estimation ENABLED: n_bootstrap_samples=50")
+                    _d(f"[TRAIN-UNCERTAINTY] Uncertainty estimation ENABLED: n_bootstrap_samples=100")
                     _d(f"[TRAIN-CONSERVATIVE] Conservative mode ENABLED: stability_feature_boost=3.0x")
                     _d(f"[TRAIN-DIRECTIONAL] Directional feature boost: 2.0x for movement prediction")
                     st.toast("🔬 Training with conservative mode: 3x stability boost + 2x directional boost", icon="🔬")
@@ -1996,10 +2165,12 @@ def main():
                             upper_bound_estimators=n_trees,
                             early_stopping_rounds=main_early_stop,
                             uncertainty_estimation=True,
-                            n_bootstrap_samples=50,
+                            n_bootstrap_samples=100,  # Increased from 50 for better uncertainty estimation
                             directional_feature_boost=2.0,  # 2x boost for directional features
                             conservative_mode=True,  # Enable conservative predictions
                             stability_feature_boost=3.0,  # 3x boost for stability features
+                            use_gpu=(use_gpu_optuna and gpu_available),  # NEW: GPU acceleration with availability check
+                            gpu_optimization=(gpu_optimization_mode == "auto"),  # NEW: Auto-optimization
                         )
                         _d(f"[TRAIN-INTERNAL] Creating finder model with uncertainty estimation enabled")
                         finder.fit(
@@ -2021,10 +2192,12 @@ def main():
                             upper_bound_estimators=best_n,
                             early_stopping_rounds=0,
                             uncertainty_estimation=True,
-                            n_bootstrap_samples=50,
+                            n_bootstrap_samples=100,  # Increased from 50 for better uncertainty estimation
                             directional_feature_boost=2.0,  # 2x boost for directional features
                             conservative_mode=True,  # Enable conservative predictions
                             stability_feature_boost=3.0,  # 3x boost for stability features
+                            use_gpu=(use_gpu_optuna and gpu_available),  # NEW: GPU acceleration with availability check
+                            gpu_optimization=(gpu_optimization_mode == "auto"),  # NEW: Auto-optimization
                         )
                         _d(f"[TRAIN-FINAL] Creating final model with uncertainty estimation enabled for full dataset")
                         final_lgbm.fit(X_all, y_all, balance_horizons=balance_horizons, horizon_strategy=horizon_strategy)
