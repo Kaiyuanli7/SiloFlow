@@ -154,3 +154,4 @@ Once the service is running (see step 6 above) interactive Swagger docs are avai
 The service schedules a weekly retraining job (cron style) which can be adjusted in `service/schedule_config.json`.
 
 ---
+

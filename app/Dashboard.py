@@ -710,10 +710,21 @@ def plot_3d_grid(df: pd.DataFrame, *, key: str, color_by_delta: bool = False):
         color_vals = df["predicted_temp"] - df["temperature_grain"]
         c_scale = "RdBu_r"
         cbar_title = "Δ (°C)"
+        # Set midpoint to 0 for delta mode so 0 is white
+        colorbar_midpoint = 0
     else:
         color_vals = df["predicted_temp"] if has_pred else df["temperature_grain"]
         c_scale = "RdBu_r"  # red = hot, blue = cold
         cbar_title = "Temp (°C)" if not color_by_delta else "Pred (°C)"
+        # Calculate midpoint to make 0 white for temperature mode
+        min_val = color_vals.min()
+        max_val = color_vals.max()
+        if min_val < 0 and max_val > 0:
+            # If we have both positive and negative values, set midpoint to 0
+            colorbar_midpoint = 0
+        else:
+            # If all values are on one side of 0, use the middle of the range
+            colorbar_midpoint = (min_val + max_val) / 2
 
     fig = go.Figure(data=go.Scatter3d(
         x=df["grid_x"],
@@ -725,6 +736,7 @@ def plot_3d_grid(df: pd.DataFrame, *, key: str, color_by_delta: bool = False):
             color=color_vals,
             colorscale=c_scale,
             colorbar=dict(title=cbar_title),
+            cmid=colorbar_midpoint,  # Set the midpoint for the color scale
         ),
         text=texts,
         hovertemplate="%{text}<extra></extra>",
@@ -1375,21 +1387,6 @@ def main():
                 optuna_parallel = False  # Default when Optuna is disabled
                 optuna_n_jobs = 1  # Default when Optuna is disabled
                 n_trials = 50  # Default when Optuna is disabled
-                
-                # NEW: GPU settings when Optuna is disabled
-                use_gpu_optuna = False  # Default to False when Optuna is disabled
-                gpu_optimization_mode = "cpu"
-                gpu_device_id = 0
-                gpu_use_double_precision = True
-                lgbm_n_jobs = -1  # Use all cores for non-Optuna training
-                
-                # Check GPU availability even when Optuna is disabled
-                try:
-                    from granarypredict.multi_lgbm import detect_gpu_availability
-                    gpu_config = detect_gpu_availability()
-                    gpu_available = gpu_config['available']
-                except Exception as e:
-                    gpu_available = False
             future_safe = st.checkbox(_t("Future-safe (exclude env vars)"), value=False)
             if future_safe and "future_safe_enabled" not in st.session_state:
                 st.toast(_t("Future-safe mode enabled - environmental variables excluded"))
@@ -1549,19 +1546,6 @@ def main():
                 base_mdl = None
 
                 if model_choice == "LightGBM":
-                    # NEW: Ensure GPU variables are always defined for LightGBM
-                    if 'use_gpu_optuna' not in locals():
-                        use_gpu_optuna = False
-                    if 'gpu_available' not in locals():
-                        try:
-                            from granarypredict.multi_lgbm import detect_gpu_availability
-                            gpu_config = detect_gpu_availability()
-                            gpu_available = gpu_config['available']
-                        except Exception as e:
-                            gpu_available = False
-                    if 'gpu_optimization_mode' not in locals():
-                        gpu_optimization_mode = "cpu"
-                    
                     # --------- Always check for cached parameters first ------------------------
                     csv_filename = uploaded_file.name
                     _d(f"[MODEL-CONFIG] LightGBM selected, tune_optuna: {tune_optuna}")
