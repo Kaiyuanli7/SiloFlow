@@ -1,0 +1,26 @@
+{
+  "database": {
+    "host": "59.36.210.145",
+    "port": 3306,
+    "database": "cloud_lq",
+    "user": "userQuey",
+    "password": "UserQ@20240807soft"
+  },
+  "processing": {
+    "initial_chunk_size": 50000,
+    "min_chunk_size": 10000,
+    "max_chunk_size": 150000,
+    "memory_threshold_percent": 75,
+    "output_dir": "data/streaming",
+    "log_level": "DEBUG",
+    "max_records_per_batch": 100000,
+    "memory_safety_threshold_percent": 60,
+    "batch_timeout_seconds": 300,
+    "skip_pipeline_during_retrieval": true
+  },
+  "advanced": {
+    "max_retries": 3,
+    "retry_delay": 5,
+    "enable_progress_bar": true
+  }
+}

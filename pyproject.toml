@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "siloflow"
+version = "0.1.0"
+authors = [{name = "GranaryPredict Team"}]
+description = "Grain warehouse temperature forecasting pipeline"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pandas>=1.5",
+    "numpy>=1.24", 
+    "scikit-learn>=1.2",
+    "plotly>=5.14",
+    "streamlit>=1.25",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+    "joblib>=1.3",
+    "tqdm>=4.66",
+    "lightgbm>=4.2",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "apscheduler>=3.10",
+    "optuna>=3.6",
+    "python-multipart>=0.0.6",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.11.0",
+    "sqlalchemy>=1.4.0",
+    "pymysql>=1.0.0",
+    "pyarrow>=10.0.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=22.0.0", 
+    "flake8>=5.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["granarypredict*", "service*", "app*"] 

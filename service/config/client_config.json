@@ -1,0 +1,13 @@
+{
+  "server": "192.168.1.100",
+  "port": 8000,
+  "timeout": 300,
+  "file": "sample_sensor_data.csv",
+  "description": "SiloFlow Client Testing Configuration",
+  "notes": [
+    "Replace 'server' with your actual server IP address",
+    "Adjust 'timeout' based on your network speed and data size",
+    "Set 'file' to the path of your CSV file for testing",
+    "Use --create-sample flag to generate a sample CSV file"
+  ]
+} 

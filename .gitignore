@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env/
+.venv/
+venv/
+
+# Distribution / packaging
+.Python
+develop-eggs/
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Logs
+*.log
+
+# Data & model artefacts
+data/
+models/
+optuna_cache/
+service/data/
+service/forecasts/
+service/model_results/
+service/models/
+service/optuna_cache/
+service/temp_uploads/
+service/streaming_config.json
+service/setup_data_retrieval.py
+
+# Jupyter Notebooks
+*.ipynb_checkpoints
+
+# OS files
+.DS_Store
+Thumbs.db 

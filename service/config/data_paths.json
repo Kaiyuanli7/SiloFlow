@@ -1,0 +1,20 @@
+{
+  "data_root": "data",
+  "granaries_dir": "data/granaries",
+  "processed_dir": "data/processed", 
+  "models_dir": "data/models",
+  "forecasts_dir": "data/forecasts",
+  "temp_dir": "data/temp",
+  "uploads_dir": "temp_uploads",
+  "logs_dir": "logs",
+  "description": "Standardized data directory structure for SiloFlow service",
+  "notes": [
+    "All data pipeline scripts should use these paths",
+    "Granaries: Raw granary-specific data files",
+    "Processed: Cleaned and preprocessed data",
+    "Models: Trained machine learning models",
+    "Forecasts: Generated forecast files",
+    "Temp: Temporary processing files",
+    "Uploads: Incoming file uploads"
+  ]
+} 
