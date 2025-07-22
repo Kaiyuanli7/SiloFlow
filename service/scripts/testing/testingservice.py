@@ -1007,13 +1007,13 @@ class SiloFlowTester:
         folder_frame.columnconfigure(1, weight=1)
         
         ttk.Label(folder_frame, text="Input Folder:").grid(row=0, column=0, sticky="w", pady=2)
-        self.batch_input_folder_var = tk.StringVar(value="data/simple_retrieval")
+        self.batch_input_folder_var = tk.StringVar(value="G:/liky/siloflow/service/data/simple_retrieval")
         input_folder_entry = ttk.Entry(folder_frame, textvariable=self.batch_input_folder_var, width=60)
         input_folder_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
         ttk.Button(folder_frame, text="Browse", command=self.browse_batch_input_folder).grid(row=0, column=2, padx=5, pady=2)
         
         ttk.Label(folder_frame, text="Output Folder:").grid(row=1, column=0, sticky="w", pady=2)
-        self.batch_output_folder_var = tk.StringVar(value="data/processed")
+        self.batch_output_folder_var = tk.StringVar(value="G:/liky/siloflow/service/data/granaries")
         output_folder_entry = ttk.Entry(folder_frame, textvariable=self.batch_output_folder_var, width=60)
         output_folder_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
         ttk.Button(folder_frame, text="Browse", command=self.browse_batch_output_folder).grid(row=1, column=2, padx=5, pady=2)
@@ -1062,9 +1062,20 @@ class SiloFlowTester:
         ttk.Button(config_frame, text="Browse", command=self.browse_batch_config).grid(row=0, column=2, padx=5, pady=2)
         
         ttk.Label(config_frame, text="Max Concurrent:").grid(row=1, column=0, sticky="w", pady=2)
-        self.batch_max_concurrent_var = tk.StringVar(value="3")
+        self.batch_max_concurrent_var = tk.StringVar(value="1")  # Reduced from 3 to 1 for resource management
         concurrent_entry = ttk.Entry(config_frame, textvariable=self.batch_max_concurrent_var, width=10)
         concurrent_entry.grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        
+        # Resource management settings
+        ttk.Label(config_frame, text="Max Memory per File (GB):").grid(row=2, column=0, sticky="w", pady=2)
+        self.batch_max_memory_var = tk.StringVar(value="2.0")
+        memory_entry = ttk.Entry(config_frame, textvariable=self.batch_max_memory_var, width=10)
+        memory_entry.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        
+        ttk.Label(config_frame, text="Processing Timeout (min):").grid(row=3, column=0, sticky="w", pady=2)
+        self.batch_timeout_var = tk.StringVar(value="30")
+        timeout_entry = ttk.Entry(config_frame, textvariable=self.batch_timeout_var, width=10)
+        timeout_entry.grid(row=3, column=1, sticky="w", padx=5, pady=2)
         
         # Control buttons
         control_frame = ttk.Frame(batch_frame)
@@ -1114,7 +1125,8 @@ class SiloFlowTester:
         self.batch_log_text.insert(tk.END, "5. Click 'Scan Folder' to preview files\n")
         self.batch_log_text.insert(tk.END, "6. Click 'Start Batch Processing' to begin\n\n")
         self.batch_log_text.insert(tk.END, "💡 Tip: Use file patterns like '*_raw.csv' to target specific files\n")
-        self.batch_log_text.insert(tk.END, "🔧 The system will process files sequentially with real-time progress\n\n")
+        self.batch_log_text.insert(tk.END, "🔧 The system will process files sequentially with real-time progress\n")
+        self.batch_log_text.insert(tk.END, "📦 Processed files are saved in .parquet format for better performance and smaller size\n\n")
         
     def test_connection(self):
         """Test HTTP service connection with modern status updates"""
@@ -3379,15 +3391,65 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 
                 self.root.after(0, self.batch_log_text.insert, tk.END, f"📊 Found {len(self.batch_files_list)} files to process:\n")
                 
+                total_size_mb = 0
+                large_files = []
+                
                 for i, file_path in enumerate(self.batch_files_list[:10], 1):  # Show first 10
                     file_size = file_path.stat().st_size
                     size_mb = file_size / (1024 * 1024)
-                    self.root.after(0, self.batch_log_text.insert, tk.END, 
-                        f"   {i}. {file_path.name} ({size_mb:.2f} MB)\n")
+                    total_size_mb += size_mb
+                    
+                    # Flag large files (>500MB)
+                    if size_mb > 500:
+                        large_files.append((file_path.name, size_mb))
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   {i}. {file_path.name} ({size_mb:.2f} MB) ⚠️ LARGE FILE\n")
+                    else:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   {i}. {file_path.name} ({size_mb:.2f} MB)\n")
+                
+                # Calculate total size for remaining files
+                for file_path in self.batch_files_list[10:]:
+                    file_size = file_path.stat().st_size
+                    size_mb = file_size / (1024 * 1024)
+                    total_size_mb += size_mb
+                    if size_mb > 500:
+                        large_files.append((file_path.name, size_mb))
                 
                 if len(self.batch_files_list) > 10:
                     remaining = len(self.batch_files_list) - 10
                     self.root.after(0, self.batch_log_text.insert, tk.END, f"   ... and {remaining} more files\n")
+                
+                # Show resource warnings
+                self.root.after(0, self.batch_log_text.insert, tk.END, f"\n📊 Total dataset size: {total_size_mb:.1f} MB ({total_size_mb/1024:.2f} GB)\n")
+                
+                if large_files:
+                    self.root.after(0, self.batch_log_text.insert, tk.END, f"⚠️ Found {len(large_files)} large files (>500MB):\n")
+                    for filename, size_mb in large_files[:5]:  # Show first 5 large files
+                        self.root.after(0, self.batch_log_text.insert, tk.END, f"   • {filename} ({size_mb:.1f} MB)\n")
+                    if len(large_files) > 5:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, f"   ... and {len(large_files)-5} more large files\n")
+                    
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        "💡 Tip: Large files may cause memory issues. Consider processing them individually.\n")
+                
+                # Memory usage estimate
+                try:
+                    import psutil
+                    available_memory_gb = psutil.virtual_memory().available / (1024**3)
+                    estimated_memory_needed_gb = total_size_mb / 1024 * 3  # Rough estimate: 3x file size
+                    
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"💾 Available memory: {available_memory_gb:.1f} GB, Estimated needed: {estimated_memory_needed_gb:.1f} GB\n")
+                    
+                    if estimated_memory_needed_gb > available_memory_gb * 0.8:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            "⚠️ WARNING: May not have enough memory for batch processing all files!\n")
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            "💡 Consider processing fewer files at once or adding more RAM.\n")
+                except ImportError:
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        "💡 Install psutil for memory usage estimates: pip install psutil\n")
                 
                 if not self.batch_files_list:
                     self.root.after(0, self.batch_log_text.insert, tk.END, "⚠️ No files found matching the criteria\n")
@@ -3439,8 +3501,27 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                     self.batch_current_file_index = i + 1
                     
                     self.root.after(0, self.batch_progress_var.set, f"{i + 1}/{total_files} files")
-                    self.root.after(0, self.batch_log_text.insert, tk.END, 
-                        f"\n[{i + 1}/{total_files}] Processing: {file_path.name}\n")
+                    
+                    # Get file size for logging
+                    try:
+                        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"\n[{i + 1}/{total_files}] Processing: {file_path.name} ({file_size_mb:.1f} MB)\n")
+                    except:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"\n[{i + 1}/{total_files}] Processing: {file_path.name}\n")
+                    
+                    # Check system resources before processing
+                    try:
+                        import psutil
+                        memory = psutil.virtual_memory()
+                        if memory.percent > 90:  # If memory usage >90%
+                            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                                f"   ⚠️ High memory usage ({memory.percent:.1f}%), waiting...\n")
+                            import time
+                            time.sleep(30)  # Wait 30 seconds for memory to free up
+                    except ImportError:
+                        pass  # psutil not available
                     
                     try:
                         # Process the file through the pipeline
@@ -3466,9 +3547,13 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                         self.root.after(0, self.batch_log_text.insert, tk.END, 
                             f"   ❌ Error processing {file_path.name}: {str(e)}\n")
                     
-                    # Small delay between files
+                    # Force garbage collection between files to free memory
+                    import gc
+                    gc.collect()
+                    
+                    # Longer delay between files for resource management
                     import time
-                    time.sleep(1)
+                    time.sleep(2)
                 
                 # Final summary
                 self.root.after(0, self.batch_log_text.insert, tk.END, 
@@ -3502,9 +3587,14 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             # Ensure output folder exists
             output_folder.mkdir(parents=True, exist_ok=True)
             
-            # Create file-specific output folder
-            file_output = output_folder / file_path.stem
-            file_output.mkdir(parents=True, exist_ok=True)
+            # Don't create file-specific output folders anymore
+            # All CLI commands (sort, process, train, forecast) use standard system paths
+            file_output = output_folder
+            
+            # Log info about where model/forecast results will go if those steps are enabled
+            if run_training or run_forecasting:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ℹ️ Note: Models will be saved to 'models/' directory and forecasts to 'forecasts/' directory\n")
             
             success_steps = 0
             total_steps = sum([run_sorting, run_processing, run_training, run_forecasting])
@@ -3512,16 +3602,20 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             # Step 1: Sorting (if enabled)
             if run_sorting:
                 self.root.after(0, self.batch_log_text.insert, tk.END, "      🔤 Running data sorting...\n")
-                if self._run_sorting_step(file_path, file_output, config_path):
+                if run_sorting and not (run_processing or run_training or run_forecasting):
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        "         ℹ️ Sorting will split input file by granary into separate .parquet files in the output folder.\n")
+                if self._run_sorting_step(file_path, output_folder, config_path):
                     success_steps += 1
                     self.root.after(0, self.batch_log_text.insert, tk.END, "         ✅ Sorting completed\n")
                 else:
                     self.root.after(0, self.batch_log_text.insert, tk.END, "         ❌ Sorting failed\n")
-            
+
             # Step 2: Processing (if enabled)
             if run_processing:
                 self.root.after(0, self.batch_log_text.insert, tk.END, "      ⚙️ Running data processing...\n")
-                if self._run_processing_step(file_path, file_output, config_path):
+                self.root.after(0, self.batch_log_text.insert, tk.END, "         ℹ️ Output will be saved as .parquet format for better performance\n")
+                if self._run_processing_step(file_path, output_folder, config_path):
                     success_steps += 1
                     self.root.after(0, self.batch_log_text.insert, tk.END, "         ✅ Processing completed\n")
                 else:
@@ -3553,65 +3647,177 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             return False
     
     def _run_sorting_step(self, file_path, output_folder, config_path):
-        """Run the sorting step of the pipeline"""
+        """Run the sorting (ingest) step using the CLI pipeline"""
         try:
-            # For now, implement a basic sorting operation
-            # This could be expanded to use actual sorting logic from your pipeline
-            
-            if file_path.suffix.lower() == '.csv':
-                import pandas as pd
-                df = pd.read_csv(file_path)
-                
-                # Basic sorting by first column if it exists
-                if len(df.columns) > 0:
-                    first_col = df.columns[0]
-                    df_sorted = df.sort_values(by=first_col)
-                    
-                    # Save sorted file
-                    sorted_file = output_folder / f"{file_path.stem}_sorted.csv"
-                    df_sorted.to_csv(sorted_file, index=False)
-                    return True
-            
-            elif file_path.suffix.lower() == '.parquet':
-                import pandas as pd
-                df = pd.read_parquet(file_path)
-                
-                # Basic sorting by first column if it exists
-                if len(df.columns) > 0:
-                    first_col = df.columns[0]
-                    df_sorted = df.sort_values(by=first_col)
-                    
-                    # Save sorted file
-                    sorted_file = output_folder / f"{file_path.stem}_sorted.parquet"
-                    df_sorted.to_parquet(sorted_file, index=False)
-                    return True
-            
-            return False
-        except Exception:
-            return False
-    
-    def _run_processing_step(self, file_path, output_folder, config_path):
-        """Run the processing step of the pipeline"""
-        try:
-            # Run the processing script from your pipeline
+            import subprocess
             script_path = Path(__file__).parent.parent.parent / "granary_pipeline.py"
             
-            if not script_path.exists():
-                # Fallback to a basic processing operation
-                return self._basic_data_processing(file_path, output_folder)
+            # Set working directory to the service directory so data/granaries path is correct
+            working_dir = Path(__file__).parent.parent.parent
             
             cmd = [
                 sys.executable, str(script_path),
+                "ingest",
+                "--input", str(file_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=working_dir)
+            if result.returncode != 0:
+                self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Sorting CLI error: {result.stderr}\n")
+            else:
+                # Log the CLI output to show which granaries were processed
+                if result.stdout.strip():
+                    self.root.after(0, self.batch_log_text.insert, tk.END, f"         📊 {result.stdout.strip()}\n")
+                # Show where files are actually written
+                data_granaries_path = working_dir / "data" / "granaries"
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"         📁 Output files written to: {data_granaries_path}\n")
+            return result.returncode == 0
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Sorting CLI error: {e}\n")
+            return False
+    
+    def _run_processing_step(self, file_path, output_folder, config_path):
+        """Run the preprocessing step using the CLI pipeline with resource management"""
+        try:
+            import subprocess
+            import psutil
+            import os
+            
+            # Check available memory before processing
+            available_memory_gb = psutil.virtual_memory().available / (1024**3)
+            file_size_gb = os.path.getsize(file_path) / (1024**3)
+            
+            # Get user-configured memory limit
+            try:
+                max_memory_per_file_gb = float(self.batch_max_memory_var.get())
+            except ValueError:
+                max_memory_per_file_gb = 2.0  # Default if not a valid number
+                
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"         📊 Memory check: {available_memory_gb:.1f}GB available, file size: {file_size_gb:.2f}GB, limit: {max_memory_per_file_gb:.1f}GB\n")
+            
+            # Skip processing if file is too large relative to available memory or limit
+            skip_file = False
+            skip_reason = ""
+            
+            if file_size_gb > max_memory_per_file_gb:
+                skip_file = True
+                skip_reason = f"exceeds memory limit of {max_memory_per_file_gb:.1f}GB"
+            elif file_size_gb > available_memory_gb * 0.3:
+                skip_file = True
+                skip_reason = f"insufficient available memory ({available_memory_gb:.1f}GB)"
+                
+            if skip_file:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"         ⚠️ Skipping large file ({file_size_gb:.2f}GB) - {skip_reason}\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"         💡 Consider processing this file separately or increasing memory limit\n")
+                return False
+            
+            script_path = Path(__file__).parent.parent.parent / "granary_pipeline.py"
+            
+            # Extract granary name from file name for consistency
+            granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
+            
+            # Create the processed directory in the standard location expected by train/forecast
+            processed_dir = Path(__file__).parent.parent.parent / "data" / "processed"
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save in the standard location for train/forecast to find
+            processed_file = processed_dir / f"{granary_name}_processed.parquet"
+            
+            # Also save a copy to the user-selected output folder for reference
+            user_output_file = output_folder / f"{file_path.stem}_processed.parquet"
+            
+            # Create command with resource limits - save to standard location first
+            cmd = [
+                sys.executable, str(script_path),
+                "preprocess",
                 "--input", str(file_path),
-                "--output", str(output_folder),
-                "--config", str(config_path),
-                "--mode", "process"
+                "--output", str(processed_file)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            return result.returncode == 0
-        except:
-            return self._basic_data_processing(file_path, output_folder)
+            # Log where files will be saved
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"         ℹ️ Processed file will be saved to: {processed_file}\n")
+            
+            # Set resource limits for the subprocess
+            self.root.after(0, self.batch_log_text.insert, tk.END, f"         🔧 Starting preprocessing with resource limits...\n")
+            
+            # Run with extended timeout and memory monitoring
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                     text=True, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0)
+            
+            # Monitor process resource usage
+            timeout_seconds = 1800  # 30 minutes max
+            poll_interval = 10  # Check every 10 seconds
+            elapsed_time = 0
+            
+            while process.poll() is None and elapsed_time < timeout_seconds:
+                try:
+                    # Check memory usage of the process
+                    proc = psutil.Process(process.pid)
+                    memory_mb = proc.memory_info().rss / (1024**2)
+                    cpu_percent = proc.cpu_percent()
+                    
+                    # Log resource usage every 60 seconds
+                    if elapsed_time % 60 == 0 and elapsed_time > 0:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"         📈 Processing: {elapsed_time//60}min elapsed, Memory: {memory_mb:.0f}MB, CPU: {cpu_percent:.1f}%\n")
+                    
+                    # Kill process if using excessive memory (>4GB)
+                    if memory_mb > 4096:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"         ⚠️ Terminating process due to excessive memory usage ({memory_mb:.0f}MB)\n")
+                        process.terminate()
+                        break
+                        
+                except psutil.NoSuchProcess:
+                    break  # Process finished
+                except Exception:
+                    pass  # Ignore monitoring errors
+                
+                import time
+                time.sleep(poll_interval)
+                elapsed_time += poll_interval
+            
+            # Handle timeout
+            if process.poll() is None:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"         ⏰ Process timeout after {timeout_seconds//60} minutes, terminating...\n")
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                return False
+            
+            # Get the result
+            stdout, stderr = process.communicate()
+            
+            if process.returncode != 0:
+                self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Preprocess CLI error: {stderr}\n")
+                return False
+            else:
+                if stdout.strip():
+                    self.root.after(0, self.batch_log_text.insert, tk.END, f"         📊 {stdout.strip()}\n")
+                
+                # Copy the file to the user-selected output location for reference
+                import shutil
+                if processed_file.exists() and processed_file != user_output_file:
+                    try:
+                        shutil.copy(processed_file, user_output_file)
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"         📋 Copy saved to user output: {user_output_file}\n")
+                    except Exception as copy_error:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"         ⚠️ Could not copy to user output: {copy_error}\n")
+                
+                return True
+                
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Preprocess CLI error: {e}\n")
+            return False
     
     def _basic_data_processing(self, file_path, output_folder):
         """Basic data processing fallback"""
@@ -3624,9 +3830,9 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 df_processed = df.dropna()
                 df_processed.columns = [col.lower().replace(' ', '_') for col in df_processed.columns]
                 
-                # Save processed file
-                processed_file = output_folder / f"{file_path.stem}_processed.csv"
-                df_processed.to_csv(processed_file, index=False)
+                # Save processed file as parquet
+                processed_file = output_folder / f"{file_path.stem}_processed.parquet"
+                df_processed.to_parquet(processed_file, index=False)
                 return True
             
             elif file_path.suffix.lower() == '.parquet':
@@ -3647,77 +3853,133 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             return False
     
     def _run_training_step(self, file_path, output_folder, config_path):
-        """Run the training step of the pipeline"""
+        """Run the training step using the CLI pipeline - model will be saved directly to models/ directory"""
         try:
-            # Look for existing training scripts
-            possible_scripts = [
-                Path(__file__).parent.parent.parent / "granary_pipeline.py",
-                Path(__file__).parent.parent / "train_model.py",
-                Path(__file__).parent.parent.parent / "model.py"
+            import subprocess
+            script_path = Path(__file__).parent.parent.parent / "granary_pipeline.py"
+            
+            # Extract granary name from file name
+            granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
+            
+            # Log the granary name being used
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"         ℹ️ Training model for granary: {granary_name}\n")
+            
+            # Create models directory if it doesn't exist
+            models_dir = Path(__file__).parent.parent.parent / "models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Log where model will be saved
+            expected_model_path = models_dir / f"{granary_name}_forecast_model.joblib"
+            self.root.after(0, self.batch_log_text.insert, tk.END,
+                f"         ℹ️ Model will be saved to: {expected_model_path}\n")
+            
+            # Check if there's a processed file
+            processed_dir = Path(__file__).parent.parent.parent / "data" / "processed"
+            has_processed_file = False
+            if processed_dir.exists():
+                parquet_files = list(processed_dir.glob(f"*{granary_name}*.parquet"))
+                csv_files = list(processed_dir.glob(f"*{granary_name}*.csv"))
+                has_processed_file = len(parquet_files) > 0 or len(csv_files) > 0
+                
+                if has_processed_file:
+                    self.root.after(0, self.batch_log_text.insert, tk.END,
+                        f"         ℹ️ Found processed file for granary: {granary_name}\n")
+                else:
+                    self.root.after(0, self.batch_log_text.insert, tk.END,
+                        f"         ⚠️ No processed file found for granary: {granary_name}\n")
+            
+            # Run the CLI command
+            cmd = [
+                sys.executable, str(script_path),
+                "train",
+                "--granary", granary_name
             ]
             
-            for script_path in possible_scripts:
-                if script_path.exists():
-                    cmd = [
-                        sys.executable, str(script_path),
-                        "--input", str(file_path),
-                        "--output", str(output_folder),
-                        "--config", str(config_path),
-                        "--mode", "train"
-                    ]
-                    
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)  # 10 min timeout
-                    if result.returncode == 0:
-                        return True
+            # Set working directory to ensure paths are correct
+            working_dir = Path(__file__).parent.parent.parent
             
-            # Fallback: create a dummy model file to indicate training "completed"
-            model_file = output_folder / f"{file_path.stem}_model.txt"
-            model_file.write_text(f"Model trained for {file_path.name} at {datetime.now()}")
-            return True
+            # Set environment variable to disable folder creation during training
+            env = os.environ.copy()
+            env["SILOFLOW_NO_SUBFOLDER_CREATION"] = "1"
             
-        except Exception:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=working_dir, env=env)
+            if result.returncode != 0:
+                self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Training CLI error: {result.stderr}\n")
+            else:
+                # Log the CLI output
+                if result.stdout.strip():
+                    self.root.after(0, self.batch_log_text.insert, tk.END, f"         📊 {result.stdout.strip()}\n")
+                # Show where model file is saved
+                model_path = models_dir / f"{granary_name}_forecast_model.joblib"
+                if model_path.exists():
+                    self.root.after(0, self.batch_log_text.insert, tk.END,
+                        f"         📁 Model file saved to: {model_path}\n")
+            return result.returncode == 0
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Training CLI error: {e}\n")
             return False
     
     def _run_forecasting_step(self, file_path, output_folder, config_path):
-        """Run the forecasting step of the pipeline"""
+        """Run the forecasting step using the CLI pipeline - forecasts will be saved directly to forecasts/ directory"""
         try:
-            # Look for existing forecasting scripts
-            possible_scripts = [
-                Path(__file__).parent.parent.parent / "granary_pipeline.py",
-                Path(__file__).parent.parent / "forecast.py",
-                Path(__file__).parent.parent.parent / "model.py"
+            import subprocess
+            script_path = Path(__file__).parent.parent.parent / "granary_pipeline.py"
+            
+            # Extract granary name from file name
+            granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
+            
+            # Log the granary name being used
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"         ℹ️ Generating forecasts for granary: {granary_name}\n")
+            
+            # Check if model file exists
+            models_dir = Path(__file__).parent.parent.parent / "models"
+            model_path = models_dir / f"{granary_name}_forecast_model.joblib"
+            
+            if not model_path.exists():
+                self.root.after(0, self.batch_log_text.insert, tk.END,
+                    f"         ⚠️ No model file found for granary: {granary_name}\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END,
+                    f"         ℹ️ Expected model file: {model_path}\n")
+            
+            # Create forecasts directory if it doesn't exist
+            forecasts_dir = Path(__file__).parent.parent.parent / "forecasts"
+            forecasts_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Log where forecasts will be saved
+            self.root.after(0, self.batch_log_text.insert, tk.END,
+                f"         ℹ️ Forecasts will be saved to: {forecasts_dir}\n")
+            
+            # Run the CLI command with proper working directory
+            cmd = [
+                sys.executable, str(script_path),
+                "forecast",
+                "--granary", granary_name,
+                "--horizon", "7"
             ]
             
-            for script_path in possible_scripts:
-                if script_path.exists():
-                    cmd = [
-                        sys.executable, str(script_path),
-                        "--input", str(file_path),
-                        "--output", str(output_folder),
-                        "--config", str(config_path),
-                        "--mode", "forecast"
-                    ]
-                    
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 min timeout
-                    if result.returncode == 0:
-                        return True
+            # Set working directory to ensure paths are correct
+            working_dir = Path(__file__).parent.parent.parent
             
-            # Fallback: create a dummy forecast file
-            forecast_file = output_folder / f"{file_path.stem}_forecast.csv"
-            import pandas as pd
+            # Set environment variable to disable folder creation during forecasting
+            env = os.environ.copy()
+            env["SILOFLOW_NO_SUBFOLDER_CREATION"] = "1"
             
-            # Create a simple forecast with dummy data
-            forecast_data = {
-                'date': pd.date_range(start='2024-01-01', periods=30, freq='D'),
-                'forecast_value': [100 + i * 2.5 for i in range(30)],
-                'confidence_lower': [95 + i * 2.0 for i in range(30)],
-                'confidence_upper': [105 + i * 3.0 for i in range(30)]
-            }
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=working_dir, env=env)
             
-            pd.DataFrame(forecast_data).to_csv(forecast_file, index=False)
-            return True
-            
-        except Exception:
+            if result.returncode != 0:
+                self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Forecasting CLI error: {result.stderr}\n")
+            else:
+                # Log the CLI output
+                if result.stdout.strip():
+                    self.root.after(0, self.batch_log_text.insert, tk.END, f"         📊 {result.stdout.strip()}\n")
+                # Show where forecasts are saved
+                self.root.after(0, self.batch_log_text.insert, tk.END,
+                    f"         📁 Forecast files saved to: {forecasts_dir}\n")
+            return result.returncode == 0
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Forecasting CLI error: {e}\n")
             return False
     
     def stop_batch_processing(self):

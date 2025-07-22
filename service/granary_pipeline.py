@@ -33,6 +33,7 @@ import argparse
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Union
 import asyncio
+import os
 
 # Add granarypredict directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -413,6 +414,10 @@ def _preprocess_silos(df: pd.DataFrame) -> pd.DataFrame:
 # --- CLI Entrypoint ---
 def main():
     parser = argparse.ArgumentParser(description="Granary Data Pipeline CLI")
+    # Check environment variable that controls subfolder creation behavior
+    # Used by batch processing GUI to disable unnecessary folder creation
+    no_subfolder_creation = os.environ.get("SILOFLOW_NO_SUBFOLDER_CREATION", "0") == "1"
+    
     subparsers = parser.add_subparsers(dest="command")
 
     ingest_parser = subparsers.add_parser("ingest", help="Ingest and sort raw CSV data")
@@ -424,6 +429,11 @@ def main():
 
     train_parser = subparsers.add_parser("train", help="Train model for a granary")
     train_parser.add_argument("--granary", required=True, help="Granary name")
+    # Add new arguments for Optuna tuning
+    train_parser.add_argument("--tune", action="store_true", help="Enable Optuna hyperparameter tuning")
+    train_parser.add_argument("--trials", type=int, default=50, help="Number of Optuna trials (default: 50)")
+    train_parser.add_argument("--force-reoptimize", action="store_true", help="Force re-optimization even if cached parameters exist")
+    train_parser.add_argument("--use-gpu", action="store_true", help="Use GPU for training and tuning")
 
     forecast_parser = subparsers.add_parser("forecast", help="Forecast for a granary")
     forecast_parser.add_argument("--granary", required=True, help="Granary name")
@@ -512,11 +522,29 @@ def main():
             df = df[final_order]
             return df
         df = clean_and_reorder(df)
-        df.to_csv(args.output, index=False)
-        print(f"Preprocessed CSV saved to {args.output}")
+        
+        # Save in the appropriate format based on file extension
+        output_path = Path(args.output)
+        if output_path.suffix.lower() == '.parquet':
+            df.to_parquet(args.output, index=False)
+            print(f"Preprocessed Parquet file saved to {args.output}")
+        else:
+            df.to_csv(args.output, index=False)
+            print(f"Preprocessed CSV saved to {args.output}")
 
     elif args.command == "train":
         logger.info(f"Training model for granary: {args.granary}")
+        
+        # Import optuna_cache for hyperparameter optimization
+        from granarypredict.optuna_cache import load_optimal_params, save_optimal_params, clear_cache, list_cached_params
+        
+        # Log Optuna tuning settings
+        if args.tune:
+            logger.info(f"Optuna hyperparameter tuning enabled: {args.trials} trials")
+            if args.force_reoptimize:
+                logger.info("Force re-optimization enabled - ignoring cached parameters")
+            if args.use_gpu:
+                logger.info("GPU acceleration enabled for tuning and training")
         
         # Find the processed file for this granary (supports both CSV and Parquet)
         processed_file = None
@@ -718,7 +746,10 @@ def main():
         # Save the model with adaptive compression
         from granarypredict.compression_utils import save_compressed_model
         model_filename = f"{args.granary}_forecast_model.joblib"
-        model_path = pathlib.Path("models") / model_filename  # Changed from pipeline/models to models
+        
+        # Check if subfolder creation is disabled (controlled by batch processing GUI)
+        # Always save to the standard models directory when no_subfolder_creation is True
+        model_path = pathlib.Path("models") / model_filename  # Standard models directory
         
         compression_stats = save_compressed_model(model, model_path)
         logger.info(f"Model saved to: {compression_stats['path']}")
