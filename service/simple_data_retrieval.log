@@ -1,0 +1,99 @@
+2025-07-22 15:26:25,327 - INFO - === Starting Data Retrieval ===
+2025-07-22 15:26:25,327 - INFO - Target: Ö±Êô¿â£¨ÐÂ¿â£©
+2025-07-22 15:26:25,327 - INFO - Silo ID: 245f6f9cba6311eeb6130c42a1e7e31a
+2025-07-22 15:26:25,327 - INFO - Date Range: 2024-01-24 to 2025-07-22
+2025-07-22 15:26:25,327 - INFO - Output Directory: data/simple_retrieval
+2025-07-22 15:26:25,327 - INFO - Step 1: Looking up silo information...
+2025-07-22 15:26:25,534 - INFO -    Granary ID: 1207a5598f024020897f1529dbc75667
+2025-07-22 15:26:25,534 - INFO -    Sub-table ID: 112
+2025-07-22 15:26:25,534 - INFO - Step 2: Validating date range...
+2025-07-22 15:26:27,311 - INFO - Step 3: Retrieving data from database...
+2025-07-22 15:26:27,311 - INFO - Querying data for silo 245f6f9cba6311eeb6130c42a1e7e31a from 2024-01-24 to 2025-07-22...
+2025-07-22 15:26:27,311 - INFO - Executing SQL query...
+2025-07-22 15:27:32,061 - INFO - Query completed. Retrieved 489015 records.
+2025-07-22 15:27:32,062 - INFO -    Columns: ['storepointId', 'storepointName', 'kdjd', 'kdwd', 'kqdz', 'storeId', 'storeName', 'line_no', 'layer_no', 'batch', 'temp', 'x', 'y', 'z', 'avg_in_temp', 'max_temp', 'min_temp', 'indoor_temp', 'indoor_humidity', 'outdoor_temp', 'outdoor_humidity']
+2025-07-22 15:27:32,643 - INFO -    Memory usage: 301.27 MB
+2025-07-22 15:27:32,643 - INFO - Step 4: Saving data to file...
+2025-07-22 15:27:33,704 - INFO -    File: data\simple_retrieval\Ö±Êô¿âÐÂ¿â_1²Ö_2024-01-24_to_2025-07-22.parquet
+2025-07-22 15:27:33,704 - INFO -    Size: 0.39 MB
+2025-07-22 15:27:33,704 - INFO -    Records: 489015
+2025-07-22 15:27:33,704 - INFO - Step 5: Data preview (first 3 rows):
+2025-07-22 15:27:33,704 - INFO -    Row 1: batch=2024-01-24 15:38:02, temp=13.25, line_no=1
+2025-07-22 15:27:33,704 - INFO -    Row 2: batch=2024-01-24 15:38:02, temp=13.25, line_no=1
+2025-07-22 15:27:33,705 - INFO -    Row 3: batch=2024-01-24 15:38:02, temp=13.75, line_no=1
+2025-07-22 15:27:33,705 - INFO - === Data Retrieval Complete ===
+2025-07-22 15:27:33,857 - INFO - Data retrieval completed successfully!
+2025-07-22 15:37:35,962 - INFO - === Starting Data Retrieval ===
+2025-07-22 15:37:35,962 - INFO - Target: ºØ¸ÚÁ¸¿â
+2025-07-22 15:37:35,962 - INFO - Silo ID: cf9751d516204d1eb5ba2e69ca3322f1
+2025-07-22 15:37:35,962 - INFO - Date Range: 2023-09-25 to 2025-07-22
+2025-07-22 15:37:35,962 - INFO - Output Directory: data/simple_retrieval
+2025-07-22 15:37:35,962 - INFO - Step 1: Looking up silo information...
+2025-07-22 15:37:36,165 - INFO -    Granary ID: 03fafbcecc934480b22718f9f7b6de7d
+2025-07-22 15:37:36,166 - INFO -    Sub-table ID: 99
+2025-07-22 15:37:36,166 - INFO - Step 2: Validating date range...
+2025-07-22 15:37:37,182 - INFO - Step 3: Retrieving data from database...
+2025-07-22 15:37:37,182 - INFO - Querying data for silo cf9751d516204d1eb5ba2e69ca3322f1 from 2023-09-25 to 2025-07-22...
+2025-07-22 15:37:37,182 - INFO - Executing SQL query...
+2025-07-22 15:38:11,160 - INFO - Query completed. Retrieved 246888 records.
+2025-07-22 15:38:11,160 - INFO -    Columns: ['storepointId', 'storepointName', 'kdjd', 'kdwd', 'kqdz', 'storeId', 'storeName', 'line_no', 'layer_no', 'batch', 'temp', 'x', 'y', 'z', 'avg_in_temp', 'max_temp', 'min_temp', 'indoor_temp', 'indoor_humidity', 'outdoor_temp', 'outdoor_humidity']
+2025-07-22 15:38:11,452 - INFO -    Memory usage: 159.57 MB
+2025-07-22 15:38:11,452 - INFO - Step 4: Saving data to file...
+2025-07-22 15:38:11,823 - INFO -    File: data\simple_retrieval\ºØ¸ÚÁ¸¿â_P15-1¶Ñ_2023-09-25_to_2025-07-22.parquet
+2025-07-22 15:38:11,823 - INFO -    Size: 0.24 MB
+2025-07-22 15:38:11,823 - INFO -    Records: 246888
+2025-07-22 15:38:11,823 - INFO - Step 5: Data preview (first 3 rows):
+2025-07-22 15:38:11,824 - INFO -    Row 1: batch=2023-09-25 15:38:46, temp=22.00, line_no=1
+2025-07-22 15:38:11,824 - INFO -    Row 2: batch=2023-09-25 15:38:46, temp=22.00, line_no=1
+2025-07-22 15:38:11,824 - INFO -    Row 3: batch=2023-09-25 15:38:46, temp=21.50, line_no=1
+2025-07-22 15:38:11,824 - INFO - === Data Retrieval Complete ===
+2025-07-22 15:38:11,905 - INFO - Data retrieval completed successfully!
+2025-07-22 15:39:35,349 - INFO - === Starting Data Retrieval ===
+2025-07-22 15:39:35,350 - INFO - Target: ºØ¸ÚÁ¸¿â
+2025-07-22 15:39:35,350 - INFO - Silo ID: cf9751d516204d1eb5ba2e69ca3322f1
+2025-07-22 15:39:35,350 - INFO - Date Range: 2023-09-25 to 2025-07-22
+2025-07-22 15:39:35,350 - INFO - Output Directory: data/simple_retrieval
+2025-07-22 15:39:35,350 - INFO - Step 1: Looking up silo information...
+2025-07-22 15:39:35,593 - INFO -    Granary ID: 03fafbcecc934480b22718f9f7b6de7d
+2025-07-22 15:39:35,593 - INFO -    Sub-table ID: 99
+2025-07-22 15:39:35,593 - INFO - Step 2: Validating date range...
+2025-07-22 15:39:36,888 - INFO - Step 3: Retrieving data from database...
+2025-07-22 15:39:36,888 - INFO - Querying data for silo cf9751d516204d1eb5ba2e69ca3322f1 from 2023-09-25 to 2025-07-22...
+2025-07-22 15:39:36,888 - INFO - Executing SQL query...
+2025-07-22 15:43:01,497 - INFO - === Starting Data Retrieval ===
+2025-07-22 15:43:01,497 - INFO - Target: Ö±Êô¿â£¨ÐÂ¿â£©
+2025-07-22 15:43:01,497 - INFO - Silo ID: f89dae47320b4dcc9790f9adc4cd73e0
+2025-07-22 15:43:01,497 - INFO - Date Range: 2024-01-24 to 2025-07-22
+2025-07-22 15:43:01,498 - INFO - Output Directory: data/simple_retrieval
+2025-07-22 15:43:01,498 - INFO - Step 1: Looking up silo information...
+2025-07-22 15:43:01,711 - INFO -    Granary ID: 1207a5598f024020897f1529dbc75667
+2025-07-22 15:43:01,711 - INFO -    Sub-table ID: 112
+2025-07-22 15:43:01,711 - INFO - Step 2: Validating date range...
+2025-07-22 15:43:02,179 - INFO - Step 3: Retrieving data from database...
+2025-07-22 15:43:02,179 - INFO - Querying data for silo f89dae47320b4dcc9790f9adc4cd73e0 from 2024-01-24 to 2025-07-22...
+2025-07-22 15:43:02,179 - INFO - Executing SQL query...
+2025-07-22 15:43:16,690 - INFO - Query completed. Retrieved 122418 records.
+2025-07-22 15:43:16,691 - INFO -    Columns: ['storepointId', 'storepointName', 'kdjd', 'kdwd', 'kqdz', 'storeId', 'storeName', 'line_no', 'layer_no', 'batch', 'temp', 'x', 'y', 'z', 'avg_in_temp', 'max_temp', 'min_temp', 'indoor_temp', 'indoor_humidity', 'outdoor_temp', 'outdoor_humidity']
+2025-07-22 15:43:16,833 - INFO -    Memory usage: 75.59 MB
+2025-07-22 15:43:16,833 - INFO - Step 4: Saving data to file...
+2025-07-22 15:43:17,021 - INFO -    File: data\simple_retrieval\Ö±Êô¿âÐÂ¿â_10²Ö_2024-01-24_to_2025-07-22.parquet
+2025-07-22 15:43:17,022 - INFO -    Size: 0.12 MB
+2025-07-22 15:43:17,022 - INFO -    Records: 122418
+2025-07-22 15:43:17,022 - INFO - Step 5: Data preview (first 3 rows):
+2025-07-22 15:43:17,022 - INFO -    Row 1: batch=2024-01-24 15:38:02, temp=14.50, line_no=1
+2025-07-22 15:43:17,022 - INFO -    Row 2: batch=2024-01-24 15:38:02, temp=14.50, line_no=1
+2025-07-22 15:43:17,023 - INFO -    Row 3: batch=2024-01-24 15:38:02, temp=14.00, line_no=1
+2025-07-22 15:43:17,023 - INFO - === Data Retrieval Complete ===
+2025-07-22 15:43:17,058 - INFO - Data retrieval completed successfully!
+2025-07-22 15:43:20,145 - INFO - === Starting Data Retrieval ===
+2025-07-22 15:43:20,145 - INFO - Target: Ö±Êô¿â£¨ÐÂ¿â£©
+2025-07-22 15:43:20,145 - INFO - Silo ID: 245f6f9cba6311eeb6130c42a1e7e31a
+2025-07-22 15:43:20,146 - INFO - Date Range: 2024-01-24 to 2025-07-22
+2025-07-22 15:43:20,146 - INFO - Output Directory: data/simple_retrieval
+2025-07-22 15:43:20,146 - INFO - Step 1: Looking up silo information...
+2025-07-22 15:43:21,345 - INFO -    Granary ID: 1207a5598f024020897f1529dbc75667
+2025-07-22 15:43:21,346 - INFO -    Sub-table ID: 112
+2025-07-22 15:43:21,346 - INFO - Step 2: Validating date range...
+2025-07-22 15:43:22,760 - INFO - Step 3: Retrieving data from database...
+2025-07-22 15:43:22,760 - INFO - Querying data for silo 245f6f9cba6311eeb6130c42a1e7e31a from 2024-01-24 to 2025-07-22...
+2025-07-22 15:43:22,760 - INFO - Executing SQL query...

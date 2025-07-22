@@ -172,43 +172,107 @@ def filter_silos_by_existing_files(silos_data: List[Dict]) -> Tuple[List[Dict], 
         return silos_data, []
     
     existing_files = list(simple_retrieval_dir.glob("*.parquet"))
-    existing_file_names = {f.stem.lower() for f in existing_files}
+    
+    # Build a set of existing silo identifiers from filenames
+    # Expected format: granary_name_silo_name_YYYY-MM-DD_to_YYYY-MM-DD.parquet
+    existing_silo_identifiers = set()
+    
+    for file_path in existing_files:
+        filename_stem = file_path.stem.lower()
+        
+        # Look for the "_to_" pattern which separates start and end dates
+        if "_to_" in filename_stem:
+            # Split at "_to_" and take the part before it
+            before_to = filename_stem.split("_to_")[0]
+            # Split by underscore to get parts
+            parts = before_to.split('_')
+            
+            # Look for date pattern (YYYY-MM-DD format) working backwards
+            # The date part will be something like "2023-01-17"
+            date_start_index = -1
+            for i in range(len(parts) - 1, -1, -1):  # Work backwards
+                part = parts[i]
+                # Check if this part looks like a date (YYYY-MM-DD)
+                if '-' in part:
+                    date_parts = part.split('-')
+                    if (len(date_parts) == 3 and
+                        len(date_parts[0]) == 4 and date_parts[0].isdigit() and
+                        len(date_parts[1]) == 2 and date_parts[1].isdigit() and
+                        len(date_parts[2]) == 2 and date_parts[2].isdigit() and
+                        2000 <= int(date_parts[0]) <= 2100 and
+                        1 <= int(date_parts[1]) <= 12 and
+                        1 <= int(date_parts[2]) <= 31):
+                        date_start_index = i
+                        break
+            
+            if date_start_index > 0:
+                # Extract the granary_silo part before the date
+                granary_silo_parts = parts[:date_start_index]
+                granary_silo_identifier = '_'.join(granary_silo_parts)
+                existing_silo_identifiers.add(granary_silo_identifier)
+                logger.debug(f"Found existing silo: {granary_silo_identifier}")
+        else:
+            # Fallback: try to find date pattern without "_to_"
+            parts = filename_stem.split('_')
+            date_start_index = -1
+            for i, part in enumerate(parts):
+                # Check if this part looks like a date (YYYY-MM-DD)
+                if '-' in part:
+                    date_parts = part.split('-')
+                    if (len(date_parts) == 3 and
+                        len(date_parts[0]) == 4 and date_parts[0].isdigit() and
+                        len(date_parts[1]) == 2 and date_parts[1].isdigit() and
+                        len(date_parts[2]) == 2 and date_parts[2].isdigit() and
+                        2000 <= int(date_parts[0]) <= 2100 and
+                        1 <= int(date_parts[1]) <= 12 and
+                        1 <= int(date_parts[2]) <= 31):
+                        date_start_index = i
+                        break
+            
+            if date_start_index > 0:
+                granary_silo_parts = parts[:date_start_index]
+                granary_silo_identifier = '_'.join(granary_silo_parts)
+                existing_silo_identifiers.add(granary_silo_identifier)
+                logger.debug(f"Found existing silo (fallback): {granary_silo_identifier}")
     
     filtered_silos = []
     skipped_silos = []
     
-    logger.info(f"Checking {len(silos_data)} silos against {len(existing_files)} existing files")
+    logger.info(f"Checking {len(silos_data)} silos against {len(existing_silo_identifiers)} existing silo identifiers")
     
     for silo in silos_data:
-        granary_name = silo.get('granary_name', '')
-        silo_name = silo.get('silo_name', '')
-        silo_id = silo.get('silo_id', '')
+        granary_name = silo.get('granary_name', '').lower()
+        silo_name = silo.get('silo_name', '').lower()
+        silo_id = silo.get('silo_id', '').lower()
         
-        # Generate possible filename patterns for this silo
-        patterns_to_check = [
+        # Generate the expected silo identifier patterns
+        # Try both silo_name and silo_id as they might be used interchangeably
+        possible_identifiers = [
             f"{granary_name}_{silo_name}",
             f"{granary_name}_{silo_id}",
-            f"{granary_name.replace(' ', '_')}_{silo_name.replace(' ', '_')}",
-            f"{granary_name.replace(' ', '_')}_{silo_id.replace(' ', '_')}"
         ]
         
+        # Also try with spaces replaced by underscores
+        if ' ' in granary_name or ' ' in silo_name:
+            possible_identifiers.extend([
+                f"{granary_name.replace(' ', '_')}_{silo_name.replace(' ', '_')}",
+                f"{granary_name.replace(' ', '_')}_{silo_id.replace(' ', '_')}"
+            ])
+        
         silo_exists = False
-        for pattern in patterns_to_check:
-            pattern_lower = pattern.lower()
-            # Check if any existing file contains this pattern or vice versa
-            for existing_name in existing_file_names:
-                if (pattern_lower in existing_name or 
-                    existing_name in pattern_lower or
-                    any(part in existing_name for part in pattern_lower.split('_') if len(part) > 2)):
-                    silo_exists = True
-                    break
-            if silo_exists:
+        matched_identifier = None
+        
+        for identifier in possible_identifiers:
+            if identifier in existing_silo_identifiers:
+                silo_exists = True
+                matched_identifier = identifier
                 break
         
-        if not silo_exists:
-            filtered_silos.append(silo)
-        else:
+        if silo_exists:
             skipped_silos.append(silo)
+            logger.debug(f"Skipping silo {granary_name}_{silo_name} - found existing file with identifier: {matched_identifier}")
+        else:
+            filtered_silos.append(silo)
     
     logger.info(f"Filtering complete: {len(filtered_silos)} new silos, {len(skipped_silos)} existing silos")
     return filtered_silos, skipped_silos

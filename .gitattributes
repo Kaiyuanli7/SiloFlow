@@ -1,0 +1,63 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Ensure Python files always use LF
+*.py text eol=lf
+*.pyx text eol=lf
+*.pyi text eol=lf
+
+# Ensure shell scripts use LF  
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows batch files should use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Jupyter notebooks - treat as text but don't normalize line endings (can cause issues)
+*.ipynb text
+
+# Configuration files
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.cfg text eol=lf
+*.conf text eol=lf
+*.ini text eol=lf
+
+# Documentation
+*.md text eol=lf
+*.rst text eol=lf
+*.txt text eol=lf
+
+# Data files - treat as binary
+*.csv binary
+*.parquet binary
+*.pkl binary
+*.joblib binary
+*.h5 binary
+*.hdf5 binary
+
+# Model files
+*.model binary
+*.pt binary
+*.pth binary
+*.onnx binary
+
+# Images
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text
+
+# Archives
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+
+# Logs - treat as text but don't enforce line endings
+*.log text
