@@ -6,21 +6,34 @@ Granary Data Pipeline - Modular CLI & Automation
 Usage:
     python granary_pipeline.py ingest --input <raw.csv>
     python granary_pipeline.py preprocess --input <granary.csv> --output <processed.csv>
-    python granary_pipeline.py train --granary <name>
+    python granary_pipeline.py train --granary <name> [--tune] [--trials 100] [--timeout 600]
     python granary_pipeline.py forecast --granary <name> --horizon <days>
 
 This script orchestrates:
 - Ingestion: sorting, deduplication, standardization
 - Preprocessing: cleaning, gap insertion, interpolation, feature engineering
-- Training: model fitting & hyperparameter optimization with Dashboard-optimized settings
+- Training: model fitting & hyperparameter optimization with Optuna tuning (default)
 - Forecasting: multi-horizon prediction
 
-Training Configuration (matching Dashboard.py):
+Training Configuration:
+- GPU Auto-Detection: Automatically detects and uses GPU if available, falls back to CPU
+- Optuna Tuning (default): Automatically finds optimal hyperparameters for each granary
+- Fixed Parameters: Uses pre-configured parameters (use --no-tune flag)
 - Quantile regression: Uses quantile objective with alpha=0.5 for improved MAE
 - Anchor-day early stopping: Uses 7-day consecutive forecasting accuracy
 - Horizon balancing: Applies increasing horizon strategy for better long-term predictions
 - Conservative mode: 3x stability feature boost + 2x directional feature boost
 - 95/5 split: Internal split for finding optimal iterations, then train on 100% data
+
+Examples:
+    # Train with Optuna tuning (recommended)
+    python granary_pipeline.py train --granary ABC123
+    
+    # Train with custom tuning parameters
+    python granary_pipeline.py train --granary ABC123 --trials 50 --timeout 300
+    
+    # Train with fixed parameters (faster but potentially less accurate)
+    python granary_pipeline.py train --granary ABC123 --no-tune
 
 All steps are modular and importable for future automation/cloud deployment.
 """
@@ -34,6 +47,36 @@ from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Union
 import asyncio
 import os
+
+# GPU Detection Function (similar to Dashboard.py)
+def detect_gpu_availability():
+    """
+    Detect if GPU acceleration is available for LightGBM.
+    Returns tuple: (gpu_available, gpu_info)
+    """
+    try:
+        import lightgbm as lgb
+        # Try to create a simple GPU-enabled LightGBM model
+        test_data = lgb.Dataset(np.random.random((10, 5)), label=np.random.random(10))
+        model = lgb.train(
+            params={'objective': 'regression', 'device': 'gpu', 'verbose': -1},
+            train_set=test_data,
+            num_boost_round=1,
+            valid_sets=[test_data],
+            callbacks=[lgb.early_stopping(1), lgb.log_evaluation(0)]
+        )
+        return True, "GPU acceleration available"
+    except Exception as e:
+        # Check if it's specifically a GPU-related error
+        error_msg = str(e).lower()
+        if any(gpu_keyword in error_msg for gpu_keyword in ['gpu', 'cuda', 'opencl', 'device']):
+            return False, f"GPU not available: {e}"
+        else:
+            # Might be some other error, still try CPU fallback
+            return False, f"GPU detection failed, using CPU: {e}"
+
+# Detect GPU availability once at module level
+GPU_AVAILABLE, GPU_INFO = detect_gpu_availability()
 
 # Add granarypredict directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -65,6 +108,12 @@ except ImportError:
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Log GPU detection results
+if GPU_AVAILABLE:
+    logger.info(f"✅ GPU acceleration detected and enabled: {GPU_INFO}")
+else:
+    logger.info(f"⚠️ GPU acceleration disabled, using CPU: {GPU_INFO}")
 
 # Constants
 TARGET_TEMP_COL = 'temperature_grain'
@@ -280,8 +329,8 @@ def run_complete_pipeline(
                 directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
                 conservative_mode=True,  # Enable conservative predictions
                 stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
-                use_gpu=True,
-                gpu_optimization=True
+                use_gpu=GPU_AVAILABLE,  # Use auto-detected GPU availability
+                gpu_optimization=GPU_AVAILABLE  # Enable GPU optimization only if GPU is available
             )
             
             logger.info("Training finder model with anchor-day early stopping and horizon balancing")
@@ -321,8 +370,8 @@ def run_complete_pipeline(
                 directional_feature_boost=2.0,
                 conservative_mode=True,
                 stability_feature_boost=3.0,
-                use_gpu=True,
-                gpu_optimization=True
+                use_gpu=GPU_AVAILABLE,  # Use auto-detected GPU availability
+                gpu_optimization=GPU_AVAILABLE  # Enable GPU optimization only if GPU is available
             )
             
             logger.info("Training final model on 100% of data")
@@ -429,11 +478,10 @@ def main():
 
     train_parser = subparsers.add_parser("train", help="Train model for a granary")
     train_parser.add_argument("--granary", required=True, help="Granary name")
-    # Add new arguments for Optuna tuning
-    train_parser.add_argument("--tune", action="store_true", help="Enable Optuna hyperparameter tuning")
-    train_parser.add_argument("--trials", type=int, default=50, help="Number of Optuna trials (default: 50)")
-    train_parser.add_argument("--force-reoptimize", action="store_true", help="Force re-optimization even if cached parameters exist")
-    train_parser.add_argument("--use-gpu", action="store_true", help="Use GPU for training and tuning")
+    train_parser.add_argument("--tune", action="store_true", default=True, help="Enable Optuna hyperparameter tuning (default: True)")
+    train_parser.add_argument("--no-tune", dest="tune", action="store_false", help="Disable Optuna hyperparameter tuning")
+    train_parser.add_argument("--trials", type=int, default=100, help="Number of Optuna trials (default: 100)")
+    train_parser.add_argument("--timeout", type=int, default=600, help="Optuna timeout in seconds (default: 600)")
 
     forecast_parser = subparsers.add_parser("forecast", help="Forecast for a granary")
     forecast_parser.add_argument("--granary", required=True, help="Granary name")
@@ -535,17 +583,6 @@ def main():
     elif args.command == "train":
         logger.info(f"Training model for granary: {args.granary}")
         
-        # Import optuna_cache for hyperparameter optimization
-        from granarypredict.optuna_cache import load_optimal_params, save_optimal_params, clear_cache, list_cached_params
-        
-        # Log Optuna tuning settings
-        if args.tune:
-            logger.info(f"Optuna hyperparameter tuning enabled: {args.trials} trials")
-            if args.force_reoptimize:
-                logger.info("Force re-optimization enabled - ignoring cached parameters")
-            if args.use_gpu:
-                logger.info("GPU acceleration enabled for tuning and training")
-        
         # Find the processed file for this granary (supports both CSV and Parquet)
         processed_file = None
         # Use centralized data paths if available
@@ -639,41 +676,86 @@ def main():
         logger.info(f"Training data shape: X={X.shape}, Y={Y.shape}")
         logger.info(f"Anchor data shape: X={anchor_X.shape}, Y={anchor_Y.shape}")
         
-        # Initialize MultiLGBM model with Dashboard-optimized settings
+        # Initialize MultiLGBM model with optional Optuna hyperparameter tuning
         from granarypredict.multi_lgbm import MultiLGBMRegressor
         
-        # Base parameters with quantile regression (matching Dashboard)
-        base_params = {
-            "objective": "quantile",
-            "alpha": 0.5,
-            "learning_rate": 0.05,
-            "max_depth": 8,
-            "num_leaves": 64,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "min_child_samples": 20,
-            "lambda_l1": 0.1,
-            "lambda_l2": 0.1,
-            "max_bin": 255,
-            "n_jobs": -1,
-        }
+        if args.tune:
+            logger.info("🔍 Starting Optuna hyperparameter tuning for granary-specific optimization...")
+            logger.info(f"🎯 Optuna settings: {args.trials} trials, {args.timeout}s timeout")
+            
+            # Use Optuna to find optimal parameters for this specific granary
+            model = MultiLGBMRegressor(
+                # Let Optuna find the best parameters instead of using fixed ones
+                base_params={
+                    "objective": "quantile",
+                    "alpha": 0.5,
+                    "n_jobs": -1,
+                },
+                # Optuna tuning settings
+                optuna_trials=args.trials,
+                optuna_timeout=args.timeout,
+                optuna_sampler="TPE",  # Tree-structured Parzen Estimator (best for continuous parameters)
+                optuna_pruner="MedianPruner",  # Prune unpromising trials early
+                optuna_study_name=f"granary_{args.granary}_tuning",
+                optuna_storage=None,  # In-memory storage (can be changed to persistent storage later)
+                
+                # Model settings
+                upper_bound_estimators=2000,
+                early_stopping_rounds=100,
+                uncertainty_estimation=True,
+                n_bootstrap_samples=50,  # Balanced for speed vs accuracy
+                directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
+                conservative_mode=True,  # Enable conservative predictions
+                stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
+                use_gpu=GPU_AVAILABLE,  # Use auto-detected GPU availability
+                gpu_optimization=GPU_AVAILABLE,  # Enable GPU optimization only if GPU is available
+                
+                # Optuna parameter search space (matching Streamlit Dashboard ranges)
+                optuna_param_space={
+                    'learning_rate': ('float', 0.01, 0.15),
+                    'max_depth': ('int', 6, 25),
+                    'num_leaves': ('int', 31, 200),
+                    'subsample': ('float', 0.6, 0.95),
+                    'colsample_bytree': ('float', 0.6, 0.95),
+                    'min_child_samples': ('int', 10, 150),
+                    'lambda_l1': ('float', 0.01, 2.0),
+                    'lambda_l2': ('float', 0.01, 2.0),
+                    'max_bin': ('int', 200, 500),
+                }
+            )
+            
+            logger.info("🚀 Training MultiLGBM model with Optuna optimization...")
+        else:
+            logger.info("⚡ Using fixed parameters (no Optuna tuning)...")
+            
+            # Use fixed parameters similar to Dashboard defaults
+            model = MultiLGBMRegressor(
+                base_params={
+                    "objective": "quantile",
+                    "alpha": 0.5,
+                    "learning_rate": 0.05,
+                    "max_depth": 8,
+                    "num_leaves": 64,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "min_child_samples": 20,
+                    "lambda_l1": 0.1,
+                    "lambda_l2": 0.1,
+                    "max_bin": 255,
+                    "n_jobs": -1,
+                },
+                upper_bound_estimators=2000,
+                early_stopping_rounds=100,
+                uncertainty_estimation=True,
+                n_bootstrap_samples=50,
+                directional_feature_boost=2.0,
+                conservative_mode=True,
+                stability_feature_boost=3.0,
+                use_gpu=GPU_AVAILABLE,  # Use auto-detected GPU availability
+                gpu_optimization=GPU_AVAILABLE  # Enable GPU optimization only if GPU is available
+            )
         
-        model = MultiLGBMRegressor(
-            base_params=base_params,
-            upper_bound_estimators=2000,
-            early_stopping_rounds=100,
-            uncertainty_estimation=True,
-            n_bootstrap_samples=100,  # Increased from 50 for better uncertainty estimation
-            directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
-            conservative_mode=True,  # Enable conservative predictions
-            stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
-            use_gpu=True,
-            gpu_optimization=True
-        )
-        
-        logger.info("Training MultiLGBM model on 95% of data with 5% anchor validation...")
-        
-        # Train the model on training data with anchor validation
+        # Train the model with or without Optuna hyperparameter optimization
         model.fit(
             X=X,
             Y=Y,
@@ -687,8 +769,31 @@ def main():
             horizon_strategy="increasing",  # Increasing horizon importance
         )
         
-        # Now train final model on full dataset with best iteration
-        logger.info("Training final model on full dataset...")
+        # Log the results of hyperparameter tuning if enabled
+        if args.tune:
+            if hasattr(model, 'best_params_'):
+                logger.info(f"🎯 Best parameters found by Optuna: {model.best_params_}")
+                logger.info(f"🏆 Best validation score: {model.best_score_:.4f}")
+            
+            # Log Optuna study statistics
+            if hasattr(model, 'optuna_study_') and model.optuna_study_ is not None:
+                study = model.optuna_study_
+                logger.info(f"📊 Optuna completed {len(study.trials)} trials")
+                logger.info(f"📈 Best trial number: {study.best_trial.number}")
+                
+                # Show parameter importance if available
+                try:
+                    importance = study.get_param_importances()
+                    logger.info("🔍 Parameter importance (top 3):")
+                    for param, importance_val in sorted(importance.items(), key=lambda x: x[1], reverse=True)[:3]:
+                        logger.info(f"   {param}: {importance_val:.3f}")
+                except Exception as e:
+                    logger.warning(f"Could not get parameter importance: {e}")
+        else:
+            logger.info("⚡ Model trained with fixed parameters")
+        
+        # Now train final model on full dataset with best iteration and best parameters
+        logger.info("🏁 Training final model on full dataset with optimized parameters...")
         
         # Prepare full dataset features and targets
         full_X, full_Y = select_feature_target_multi(
@@ -698,19 +803,46 @@ def main():
             allow_na=False
         )
         
-        # Create final model with same parameters but no early stopping
-        final_params = base_params | {"n_estimators": model.best_iteration_ if hasattr(model, 'best_iteration_') else 1000}  # 🚀 OPTIMIZED: Reduced from 2000
+        # Get the best parameters found by Optuna, or use defaults if tuning failed
+        if hasattr(model, 'best_params_') and model.best_params_:
+            best_params = model.best_params_.copy()
+        else:
+            # Fallback to reasonable defaults if Optuna failed
+            logger.warning("⚠️ No optimal parameters found, using fallback defaults")
+            best_params = {
+                "learning_rate": 0.05,
+                "max_depth": 8,
+                "num_leaves": 64,
+                "subsample": 0.8,
+                "colsample_bytree": 0.8,
+                "min_child_samples": 20,
+                "lambda_l1": 0.1,
+                "lambda_l2": 0.1,
+                "max_bin": 255,
+            }
+        
+        # Add required base parameters
+        final_params = {
+            "objective": "quantile",
+            "alpha": 0.5,
+            "n_jobs": -1,
+            "n_estimators": model.best_iteration_ if hasattr(model, 'best_iteration_') else 1000,
+        }
+        final_params.update(best_params)
+        
+        logger.info(f"🎯 Final model parameters: {final_params}")
+        
         final_model = MultiLGBMRegressor(
             base_params=final_params,
-            upper_bound_estimators=model.best_iteration_ if hasattr(model, 'best_iteration_') else 1000,  # 🚀 OPTIMIZED: Reduced from 2000
+            upper_bound_estimators=model.best_iteration_ if hasattr(model, 'best_iteration_') else 1000,
             early_stopping_rounds=0,  # No early stopping for final model
             uncertainty_estimation=True,
-            n_bootstrap_samples=25,  # 🚀 OPTIMIZED: Reduced from 100 for 75% speed improvement
+            n_bootstrap_samples=25,  # Optimized for speed
             directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
             conservative_mode=True,  # Enable conservative predictions
             stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
-            use_gpu=True,
-            gpu_optimization=True
+            use_gpu=GPU_AVAILABLE,  # Use auto-detected GPU availability
+            gpu_optimization=GPU_AVAILABLE  # Enable GPU optimization only if GPU is available
         )
         
         # Train on full dataset

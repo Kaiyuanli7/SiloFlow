@@ -1035,6 +1035,25 @@ class SiloFlowTester:
         self.batch_forecasting_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(options_frame, text="🔮 Forecasting", variable=self.batch_forecasting_var).grid(row=1, column=1, sticky="w", padx=10)
         
+        # Hyperparameter tuning options (sub-section)
+        tuning_frame = ttk.LabelFrame(options_frame, text="Hyperparameter Tuning", padding="5")
+        tuning_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5, padx=10)
+        tuning_frame.columnconfigure(1, weight=1)
+        
+        self.batch_tune_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tuning_frame, text="🔍 Enable Optuna Tuning", variable=self.batch_tune_var).grid(row=0, column=0, sticky="w", pady=2)
+        
+        # Tuning parameters
+        ttk.Label(tuning_frame, text="Trials:").grid(row=1, column=0, sticky="w", pady=2)
+        self.batch_trials_var = tk.StringVar(value="50")
+        trials_entry = ttk.Entry(tuning_frame, textvariable=self.batch_trials_var, width=10)
+        trials_entry.grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        
+        ttk.Label(tuning_frame, text="Timeout (seconds):").grid(row=2, column=0, sticky="w", pady=2)
+        self.batch_timeout_var = tk.StringVar(value="300")
+        timeout_entry = ttk.Entry(tuning_frame, textvariable=self.batch_timeout_var, width=10)
+        timeout_entry.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        
         # File filtering section
         filter_frame = ttk.LabelFrame(batch_frame, text="File Filtering", padding="10")
         filter_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=5, padx=5)
@@ -3889,12 +3908,34 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                     self.root.after(0, self.batch_log_text.insert, tk.END,
                         f"         ⚠️ No processed file found for granary: {granary_name}\n")
             
-            # Run the CLI command
+            # Get tuning options from GUI
+            use_tuning = self.batch_tune_var.get()
+            trials = self.batch_trials_var.get()
+            timeout = self.batch_timeout_var.get()
+            
+            # Run the CLI command with optional Optuna hyperparameter tuning
             cmd = [
                 sys.executable, str(script_path),
                 "train",
                 "--granary", granary_name
             ]
+            
+            if use_tuning:
+                cmd.extend([
+                    "--tune",  # Enable Optuna hyperparameter tuning
+                    "--trials", str(trials),
+                    "--timeout", str(timeout)
+                ])
+                self.root.after(0, self.batch_log_text.insert, tk.END,
+                    f"         🔍 Using Optuna hyperparameter tuning ({trials} trials, {timeout}s timeout)\n")
+            else:
+                cmd.append("--no-tune")
+                self.root.after(0, self.batch_log_text.insert, tk.END,
+                    f"         ⚡ Using fixed parameters (no tuning)\n")
+            
+            # Add GPU detection feedback
+            self.root.after(0, self.batch_log_text.insert, tk.END,
+                f"         💻 GPU/CPU detection will be handled automatically by the training process\n")
             
             # Set working directory to ensure paths are correct
             working_dir = Path(__file__).parent.parent.parent
@@ -3903,7 +3944,15 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             env = os.environ.copy()
             env["SILOFLOW_NO_SUBFOLDER_CREATION"] = "1"
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=working_dir, env=env)
+            # Calculate timeout based on tuning settings (with buffer)
+            process_timeout = 900 if use_tuning else 600  # 15 min for tuning, 10 min for fixed params
+            if use_tuning:
+                try:
+                    process_timeout = max(900, int(timeout) + 300)  # Tuning timeout + 5 min buffer
+                except ValueError:
+                    process_timeout = 900
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=process_timeout, cwd=working_dir, env=env)
             if result.returncode != 0:
                 self.root.after(0, self.batch_log_text.insert, tk.END, f"         ❌ Training CLI error: {result.stderr}\n")
             else:
