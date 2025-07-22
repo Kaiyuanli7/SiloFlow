@@ -1,0 +1,36 @@
+{
+  "database": {
+    "host": "59.36.210.145",
+    "port": 3306,
+    "database": "cloud_lq",
+    "user": "userQuey",
+    "password": "UserQ@20240807soft",
+    "charset": "utf8mb4"
+  },
+  "processing": {
+    "initial_chunk_size": 50000,
+    "min_chunk_size": 10000,
+    "max_chunk_size": 150000,
+    "initial_batch_size": 50000,
+    "min_batch_size": 10000,
+    "max_batch_size": 150000,
+    "memory_threshold_percent": 75,
+    "critical_memory_percent": 85,
+    "chunk_size_days": 7,
+    "max_workers": 4,
+    "enable_compression": true,
+    "compression_level": 6
+  },
+  "output": {
+    "granaries_format": "parquet",
+    "processed_format": "parquet", 
+    "models_format": "compressed_joblib",
+    "forecasts_format": "parquet"
+  },
+  "monitoring": {
+    "log_level": "INFO",
+    "enable_progress_bars": true,
+    "memory_check_interval": 10,
+    "report_interval_batches": 50
+  }
+}

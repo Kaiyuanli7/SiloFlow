@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data & model artefacts  
+data/*
+!data/.gitkeep
+!data/*/.gitkeep
+models/*
+!models/.gitkeep
+!models/*/.gitkeep
+service/data/*
+!service/data/.gitkeep
+!service/data/*/.gitkeep
+optuna_cache/*
+!optuna_cache/.gitkeep
+
+# Virtual environments
+.env/
+.venv/
+venv/
+
+# Distribution / packaging
+.Python
+develop-eggs/
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Logs
+*.log
+
+# Data & model artefacts
+optuna_cache/*
+
+# Jupyter Notebooks
+*.ipynb_checkpoints
+
+# OS files
+.DS_Store
+Thumbs.db 

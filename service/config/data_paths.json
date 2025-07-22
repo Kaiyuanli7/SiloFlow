@@ -1,0 +1,26 @@
+{
+  "data_root": "data",
+  "granaries_dir": "data/granaries",
+  "processed_dir": "data/processed", 
+  "models_dir": "data/models",
+  "forecasts_dir": "data/forecasts",
+  "temp_dir": "data/temp",
+  "uploads_dir": "temp_uploads",
+  "logs_dir": "logs",
+  "simple_retrieval_dir": "data/simple_retrieval",
+  "streaming_output_dir": "data/streaming",
+  "batch_output_dir": "data/batch",
+  "description": "Optimized data directory structure for SiloFlow service",
+  "notes": [
+    "All data pipeline scripts should use these paths for consistency",
+    "Granaries: Raw granary-specific data files",
+    "Processed: Cleaned and preprocessed data",
+    "Models: Trained machine learning models (with compression)",
+    "Forecasts: Generated forecast files with timestamps",
+    "Temp: Temporary processing files (auto-cleaned)",
+    "Uploads: Incoming file uploads (auto-cleaned after processing)",
+    "Simple Retrieval: Simple data retrieval scripts and outputs",
+    "Streaming: Real-time data streaming outputs",
+    "Batch: Batch processing outputs"
+  ]
+} 
