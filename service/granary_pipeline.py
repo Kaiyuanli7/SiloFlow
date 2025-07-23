@@ -265,39 +265,235 @@ from typing import Optional, List, Dict, Tuple, Union
 import asyncio
 import os
 
-# GPU Detection Function (with user override support)
-def detect_gpu_availability(force_enable=False):
+# GPU Detection Function (with multi-GPU support and proper selection)
+def detect_gpu_availability(force_enable=False, preferred_gpu_id=None):
     """
-    Detect if GPU acceleration is available for LightGBM.
-    Returns tuple: (gpu_available, gpu_info)
+    Enhanced GPU detection with multi-GPU support and proper selection.
+    Returns tuple: (gpu_available, gpu_info, gpu_config)
     
     Args:
         force_enable: If True, attempt to enable GPU even if auto-detection is disabled
+        preferred_gpu_id: Specific GPU ID to use (0, 1, 2, etc.). If None, auto-select best GPU
     """
     if force_enable:
-        # User requested GPU - try actual detection
+        # User requested GPU - try comprehensive detection
         try:
             import lightgbm as lgb
             import numpy as np
             
-            # Try to create a simple GPU-enabled LightGBM model
-            test_data = lgb.Dataset(np.random.random((10, 5)), label=np.random.random(10))
+            # Detect available GPUs
+            gpu_info = detect_available_gpus()
+            
+            if not gpu_info['gpus']:
+                return False, "No GPUs detected on system", {}
+            
+            # Select which GPU to use
+            if preferred_gpu_id is not None:
+                if preferred_gpu_id >= len(gpu_info['gpus']):
+                    return False, f"GPU ID {preferred_gpu_id} not available. Available GPUs: {len(gpu_info['gpus'])}", {}
+                selected_gpu = preferred_gpu_id
+                selection_reason = f"user-specified GPU {preferred_gpu_id}"
+            else:
+                # Auto-select best GPU based on memory and compute capability
+                selected_gpu = select_best_gpu(gpu_info['gpus'])
+                selection_reason = f"auto-selected best GPU {selected_gpu}"
+            
+            # Test the selected GPU with LightGBM
+            gpu_config = {
+                'device': 'gpu',
+                'gpu_platform_id': 0,  # Usually 0 for CUDA/OpenCL
+                'gpu_device_id': selected_gpu,
+                'gpu_use_dp': True,  # Use double precision for stability
+                'max_bin': 255,  # Optimized for GPU memory
+            }
+            
+            # Verify GPU works with LightGBM
+            test_data = lgb.Dataset(np.random.random((100, 10)), label=np.random.random(100))
+            test_params = {
+                'objective': 'regression', 
+                'verbose': -1,
+                **gpu_config
+            }
+            
             model = lgb.train(
-                params={'objective': 'regression', 'device': 'gpu', 'verbose': -1},
+                params=test_params,
                 train_set=test_data,
-                num_boost_round=1,
+                num_boost_round=5,
                 valid_sets=[test_data],
-                callbacks=[lgb.early_stopping(1), lgb.log_evaluation(0)]
+                callbacks=[lgb.early_stopping(3), lgb.log_evaluation(0)]
             )
-            return True, "GPU acceleration enabled by user and verified working"
+            
+            gpu_details = gpu_info['gpus'][selected_gpu]
+            success_msg = (
+                f"GPU acceleration enabled: {gpu_details['name']} "
+                f"({gpu_details['memory_mb']:.0f}MB, {selection_reason})"
+            )
+            
+            return True, success_msg, gpu_config
+            
         except Exception as e:
-            return False, f"GPU requested by user but not available: {e}"
+            return False, f"GPU requested but failed: {e}", {}
     else:
         # Default behavior - disabled for compatibility
-        return False, "GPU detection disabled by default - using CPU for compatibility"
+        return False, "GPU detection disabled by default - using CPU for compatibility", {}
 
-# Detect GPU availability once at module level
-GPU_AVAILABLE, GPU_INFO = detect_gpu_availability()
+def detect_available_gpus():
+    """
+    Detect all available GPUs on the system with detailed information.
+    Returns dict with GPU information for proper selection.
+    """
+    gpu_info = {
+        'gpus': [],
+        'total_gpus': 0,
+        'detection_method': 'none'
+    }
+    
+    # Try NVIDIA GPUs first (most common for ML)
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        gpu_count = pynvml.nvmlDeviceGetCount()
+        
+        for i in range(gpu_count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(handle).decode('utf-8')
+            memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            
+            # Get utilization info
+            try:
+                utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                gpu_util = utilization.gpu
+                memory_util = utilization.memory
+            except:
+                gpu_util = 0
+                memory_util = 0
+            
+            gpu_info['gpus'].append({
+                'id': i,
+                'name': name,
+                'memory_total_mb': memory_info.total / 1024 / 1024,
+                'memory_free_mb': memory_info.free / 1024 / 1024,
+                'memory_used_mb': memory_info.used / 1024 / 1024,
+                'gpu_utilization': gpu_util,
+                'memory_utilization': memory_util,
+                'vendor': 'NVIDIA'
+            })
+        
+        gpu_info['total_gpus'] = gpu_count
+        gpu_info['detection_method'] = 'pynvml'
+        return gpu_info
+        
+    except ImportError:
+        pass  # pynvml not available
+    except Exception as e:
+        pass  # NVIDIA detection failed
+    
+    # Try OpenCL detection as fallback
+    try:
+        import pyopencl as cl
+        platforms = cl.get_platforms()
+        
+        gpu_id = 0
+        for platform in platforms:
+            devices = platform.get_devices(device_type=cl.device_type.GPU)
+            for device in devices:
+                # Get basic device info
+                name = device.name.strip()
+                global_mem = device.global_mem_size / 1024 / 1024  # Convert to MB
+                
+                gpu_info['gpus'].append({
+                    'id': gpu_id,
+                    'name': name,
+                    'memory_total_mb': global_mem,
+                    'memory_free_mb': global_mem * 0.9,  # Estimate
+                    'memory_used_mb': global_mem * 0.1,  # Estimate
+                    'gpu_utilization': 0,  # Cannot get real-time utilization
+                    'memory_utilization': 10,  # Estimate
+                    'vendor': str(platform.vendor).strip()
+                })
+                gpu_id += 1
+        
+        gpu_info['total_gpus'] = len(gpu_info['gpus'])
+        gpu_info['detection_method'] = 'opencl'
+        return gpu_info
+        
+    except ImportError:
+        pass  # pyopencl not available
+    except Exception as e:
+        pass  # OpenCL detection failed
+    
+    # No GPUs detected
+    return gpu_info
+
+def select_best_gpu(gpus):
+    """
+    Select the best GPU for LightGBM training based on multiple factors.
+    Returns the GPU ID of the best GPU.
+    """
+    if not gpus:
+        return 0
+    
+    if len(gpus) == 1:
+        return 0
+    
+    # Scoring function: prioritize free memory, low utilization, and total memory
+    best_gpu = 0
+    best_score = -1
+    
+    for gpu in gpus:
+        # Calculate score based on:
+        # 1. Free memory (40% weight)
+        # 2. Low GPU utilization (30% weight) 
+        # 3. Total memory (20% weight)
+        # 4. Low memory utilization (10% weight)
+        
+        free_memory_score = gpu['memory_free_mb'] / max(g['memory_total_mb'] for g in gpus)
+        gpu_util_score = max(0, (100 - gpu['gpu_utilization']) / 100)
+        total_memory_score = gpu['memory_total_mb'] / max(g['memory_total_mb'] for g in gpus)
+        memory_util_score = max(0, (100 - gpu['memory_utilization']) / 100)
+        
+        score = (
+            0.4 * free_memory_score +
+            0.3 * gpu_util_score +
+            0.2 * total_memory_score +
+            0.1 * memory_util_score
+        )
+        
+        if score > best_score:
+            best_score = score
+            best_gpu = gpu['id']
+    
+    return best_gpu
+
+def get_gpu_config_for_dataset(dataset_size, feature_count, gpu_memory_mb):
+    """
+    Get optimal GPU configuration based on dataset characteristics and GPU memory.
+    """
+    # Estimate memory requirements
+    # Rough estimate: dataset_size * feature_count * 8 bytes * 3 (for working memory)
+    estimated_memory_mb = (dataset_size * feature_count * 8 * 3) / (1024 * 1024)
+    
+    config = {
+        'device': 'gpu',
+        'gpu_platform_id': 0,
+        'gpu_device_id': 0,  # Will be set by caller
+        'gpu_use_dp': True,  # Use double precision for stability
+    }
+    
+    # Adjust max_bin based on available memory and dataset size
+    if estimated_memory_mb > gpu_memory_mb * 0.8:  # If using >80% of GPU memory
+        config['max_bin'] = 127  # Very conservative
+    elif estimated_memory_mb > gpu_memory_mb * 0.6:  # If using >60% of GPU memory
+        config['max_bin'] = 255  # Conservative
+    elif dataset_size > 500_000:  # Large datasets
+        config['max_bin'] = 255  # Conservative for large data
+    else:
+        config['max_bin'] = 511  # Standard
+    
+    return config
+
+# Detect GPU availability once at module level with multi-GPU support
+GPU_AVAILABLE, GPU_INFO, GPU_CONFIG = detect_gpu_availability()
 
 # Add granarypredict directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -318,6 +514,25 @@ try:
 except ImportError:
     HAS_POLARS_DATA_UTILS = False
     print("*** POLARS DATA UTILS: Using standard pandas-only sorting and grouping")
+
+# Import GPU-accelerated data utilities for maximum performance
+try:
+    from granarypredict.gpu_data_utils import (
+        gpu_comprehensive_sort_optimized,
+        gpu_assign_group_id_optimized,
+        gpu_data_pipeline,
+        detect_optimal_backend,
+        get_gpu_data_backend_info,
+        HAS_CUDF
+    )
+    HAS_GPU_DATA_UTILS = True
+    if HAS_CUDF:
+        print("*** GPU DATA UTILS: RAPIDS cuDF GPU-accelerated data processing available (10-150x speedup)")
+    else:
+        print("*** GPU DATA UTILS: GPU utilities available but cuDF not installed - falling back to Polars/pandas")
+except ImportError:
+    HAS_GPU_DATA_UTILS = False
+    print("*** GPU DATA UTILS: Using standard data processing (install cudf for massive speedups)")
 
 # Import cleaning helpers from the correct location
 # These functions are defined in the Dashboard.py file, so we'll import them from there
@@ -343,11 +558,75 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Log GPU detection results
+def get_gpu_config_for_training(dataset_size=None, feature_count=None, force_gpu_id=None):
+    """
+    Get GPU configuration for model training with proper multi-GPU handling.
+    
+    Args:
+        dataset_size: Number of rows in dataset
+        feature_count: Number of features
+        force_gpu_id: Specific GPU ID to use (overrides auto-selection)
+    
+    Returns:
+        dict: GPU configuration for LightGBM or empty dict for CPU
+    """
+    if not GPU_AVAILABLE:
+        return {}
+    
+    # Use module-level config as base
+    config = GPU_CONFIG.copy()
+    
+    # Override GPU ID if specified
+    if force_gpu_id is not None:
+        gpu_details = detect_available_gpus()
+        if force_gpu_id < len(gpu_details['gpus']):
+            config['gpu_device_id'] = force_gpu_id
+            logger.info(f"🎯 Using user-specified GPU {force_gpu_id}")
+        else:
+            logger.warning(f"⚠️  Requested GPU {force_gpu_id} not available, using auto-selected GPU {config['gpu_device_id']}")
+    
+    # Optimize config based on dataset characteristics
+    if dataset_size and feature_count:
+        gpu_details = detect_available_gpus()
+        if gpu_details['gpus'] and config.get('gpu_device_id', 0) < len(gpu_details['gpus']):
+            gpu_memory = gpu_details['gpus'][config['gpu_device_id']]['memory_free_mb']
+            optimized_config = get_gpu_config_for_dataset(dataset_size, feature_count, gpu_memory)
+            config.update(optimized_config)
+            config['gpu_device_id'] = config.get('gpu_device_id', 0)  # Preserve selected GPU
+    
+    return config
+
+# Log GPU detection results with enhanced multi-GPU information
 if GPU_AVAILABLE:
     logger.info(f"✅ GPU acceleration detected and enabled: {GPU_INFO}")
+    if GPU_CONFIG:
+        gpu_id = GPU_CONFIG.get('gpu_device_id', 'unknown')
+        max_bin = GPU_CONFIG.get('max_bin', 'default')
+        logger.info(f"🎯 GPU Configuration: Device {gpu_id}, max_bin={max_bin}")
 else:
     logger.info(f"⚠️ GPU acceleration disabled, using CPU: {GPU_INFO}")
+
+# Log detected GPU details if available
+gpu_details = detect_available_gpus()
+if gpu_details['gpus']:
+    logger.info(f"🔍 GPU Detection Summary: {gpu_details['total_gpus']} GPU(s) found via {gpu_details['detection_method']}")
+    for gpu in gpu_details['gpus']:
+        logger.info(f"   GPU {gpu['id']}: {gpu['name']} ({gpu['memory_total_mb']:.0f}MB, "
+                   f"{gpu['memory_free_mb']:.0f}MB free, {gpu['gpu_utilization']}% util)")
+else:
+    logger.info("🔍 GPU Detection: No GPUs detected on system")
+
+# Log GPU data processing backend information
+if HAS_GPU_DATA_UTILS:
+    gpu_backend_info = get_gpu_data_backend_info()
+    if gpu_backend_info['cudf_available']:
+        logger.info(f"🚀 GPU Data Processing: cuDF available (10-150x speedup for large datasets)")
+        if 'gpu_memory_mb' in gpu_backend_info and gpu_backend_info['gpu_memory_mb'] != 'unknown':
+            logger.info(f"   GPU Memory: {gpu_backend_info['gpu_memory_mb']:.0f}MB total, {gpu_backend_info['gpu_memory_free_mb']:.0f}MB free")
+    else:
+        logger.info(f"⚡ GPU Data Processing: cuDF not available, using Polars/pandas fallback")
+else:
+    logger.info("🐼 GPU Data Processing: Standard pandas/Polars processing (install cudf for massive speedups)")
 
 # Constants
 TARGET_TEMP_COL = 'temperature_grain'
@@ -554,6 +833,21 @@ def run_complete_pipeline(
             
             logger.info(f"Internal split sizes – train={len(train_df)}, val={len(val_df)}")
             
+            # Get GPU configuration for this training session
+            gpu_config = get_gpu_config_for_training(
+                dataset_size=len(X_train), 
+                feature_count=X_train.shape[1] if hasattr(X_train, 'shape') else None
+            )
+            
+            # Merge GPU config with base parameters
+            if gpu_config:
+                # Update max_bin from GPU config (it might be optimized for GPU memory)
+                if 'max_bin' in gpu_config:
+                    base_params['max_bin'] = gpu_config['max_bin']
+                # Add other GPU-specific parameters
+                base_params.update({k: v for k, v in gpu_config.items() if k != 'max_bin'})
+                logger.info(f"🎯 Using GPU {gpu_config.get('gpu_device_id', 'unknown')} with max_bin={gpu_config.get('max_bin', base_params.get('max_bin', 'default'))}")
+            
             finder_model = MultiLGBMRegressor(
                 base_params=base_params,
                 # 🚀 OPTIMIZED: Using granarypredict defaults for speed improvements
@@ -596,7 +890,7 @@ def run_complete_pipeline(
             )
             
             final_model = MultiLGBMRegressor(
-                base_params=base_params,
+                base_params=base_params,  # GPU config already merged in base_params
                 upper_bound_estimators=best_iteration,  # Use the best iteration from Phase 1
                 early_stopping_rounds=0,  # No early stopping for final model
                 uncertainty_estimation=True,
@@ -808,13 +1102,22 @@ def _apply_basic_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
         df = features.add_horizon_specific_directional_features(df, max_horizon=7)
         df = features.add_multi_horizon_targets(df, horizons=tuple(range(1,8)))
     
-    # 8. Sorting and grouping (using optimized versions for large datasets)
-    if HAS_POLARS_DATA_UTILS:
+    # 8. Sorting and grouping (using GPU-accelerated versions for maximum performance)
+    if HAS_GPU_DATA_UTILS:
+        # Use GPU-accelerated data processing for best performance
+        df = gpu_assign_group_id_optimized(df, group_columns=['granary_id', 'heap_id'])
+        df = gpu_comprehensive_sort_optimized(df, sort_columns=['detection_time'])
+        logger.info(f"🚀 GPU-accelerated data processing completed for {len(df):,} rows")
+    elif HAS_POLARS_DATA_UTILS:
+        # Fallback to Polars optimization
         df = assign_group_id_optimized(df)
         df = comprehensive_sort_optimized(df)
+        logger.info(f"⚡ Polars-optimized data processing completed for {len(df):,} rows")
     else:
+        # Final fallback to standard pandas
         df = assign_group_id(df)
         df = comprehensive_sort(df)
+        logger.info(f"🐼 Standard pandas data processing completed for {len(df):,} rows")
     
     # 9. Column reordering (simplified version)
     desired_order = [
@@ -853,11 +1156,13 @@ def main():
     train_parser.add_argument("--trials", type=int, default=100, help="Number of Optuna trials (default: 100)")
     train_parser.add_argument("--timeout", type=int, default=600, help="Optuna timeout in seconds (default: 600)")
     train_parser.add_argument("--gpu", action="store_true", default=False, help="Force enable GPU acceleration (if available)")
+    train_parser.add_argument("--gpu-id", type=int, help="Specific GPU ID to use (0, 1, 2, etc.). If not specified, auto-selects best GPU")
 
     forecast_parser = subparsers.add_parser("forecast", help="Forecast for a granary")
     forecast_parser.add_argument("--granary", required=True, help="Granary name")
     forecast_parser.add_argument("--horizon", type=int, default=7, help="Forecast horizon (days)")
     forecast_parser.add_argument("--gpu", action="store_true", default=False, help="Force enable GPU acceleration (if available)")
+    forecast_parser.add_argument("--gpu-id", type=int, help="Specific GPU ID to use (0, 1, 2, etc.). If not specified, auto-selects best GPU")
     pipeline_parser = subparsers.add_parser("pipeline", help="Run complete pipeline: ingest, preprocess, and train")
     pipeline_parser.add_argument("--input", required=True, help="Path to raw CSV file")
     pipeline_parser.add_argument("--granary", required=True, help="Granary name to process")
@@ -915,13 +1220,22 @@ def main():
         df = features.add_stability_features_parallel(df)
         df = features.add_horizon_specific_directional_features(df, max_horizon=7)
         df = features.add_multi_horizon_targets(df, horizons=tuple(range(1,8)))
-        # 8. Sorting and grouping (using optimized versions for large datasets)
-        if HAS_POLARS_DATA_UTILS:
+        # 8. Sorting and grouping (using GPU-accelerated versions for maximum performance)
+        if HAS_GPU_DATA_UTILS:
+            # Use GPU-accelerated data processing for best performance
+            df = gpu_assign_group_id_optimized(df, group_columns=['granary_id', 'heap_id'])
+            df = gpu_comprehensive_sort_optimized(df, sort_columns=['detection_time'])
+            logger.info(f"🚀 GPU-accelerated data processing completed for {len(df):,} rows")
+        elif HAS_POLARS_DATA_UTILS:
+            # Fallback to Polars optimization
             df = assign_group_id_optimized(df)
             df = comprehensive_sort_optimized(df)
+            logger.info(f"⚡ Polars-optimized data processing completed for {len(df):,} rows")
         else:
+            # Final fallback to standard pandas
             df = assign_group_id(df)
             df = comprehensive_sort(df)
+            logger.info(f"🐼 Standard pandas data processing completed for {len(df):,} rows")
         # 9. Remove duplicate columns (_x, _y) and reorder to match dashboard
         def clean_and_reorder(df):
             # Column standardization is already applied at the beginning of preprocessing
@@ -975,14 +1289,19 @@ def main():
         # Handle GPU override if requested by user
         if args.gpu:
             logger.info("🚀 User requested GPU acceleration - attempting to enable...")
-            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = detect_gpu_availability(force_enable=True)
+            preferred_gpu_id = getattr(args, 'gpu_id', None)
+            if preferred_gpu_id is not None:
+                logger.info(f"🎯 User specified GPU ID: {preferred_gpu_id}")
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE, GPU_CONFIG_OVERRIDE = detect_gpu_availability(
+                force_enable=True, preferred_gpu_id=preferred_gpu_id
+            )
             if GPU_AVAILABLE_OVERRIDE:
                 logger.info(f"✅ {GPU_INFO_OVERRIDE}")
             else:
                 logger.warning(f"⚠️ {GPU_INFO_OVERRIDE}")
         else:
             # Use the default GPU detection (disabled)
-            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = GPU_AVAILABLE, GPU_INFO
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE, GPU_CONFIG_OVERRIDE = GPU_AVAILABLE, GPU_INFO, GPU_CONFIG
             logger.info(f"💻 Using default GPU setting: {GPU_INFO_OVERRIDE}")
         
         # Find the processed file for this granary (supports both CSV and Parquet)
@@ -1506,14 +1825,19 @@ def main():
         # Handle GPU override if requested by user
         if args.gpu:
             logger.info("🚀 User requested GPU acceleration for forecasting - attempting to enable...")
-            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = detect_gpu_availability(force_enable=True)
+            preferred_gpu_id = getattr(args, 'gpu_id', None)
+            if preferred_gpu_id is not None:
+                logger.info(f"🎯 User specified GPU ID: {preferred_gpu_id}")
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE, GPU_CONFIG_OVERRIDE = detect_gpu_availability(
+                force_enable=True, preferred_gpu_id=preferred_gpu_id
+            )
             if GPU_AVAILABLE_OVERRIDE:
                 logger.info(f"✅ {GPU_INFO_OVERRIDE}")
             else:
                 logger.warning(f"⚠️ {GPU_INFO_OVERRIDE}")
         else:
             # Use the default GPU detection (disabled)
-            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = GPU_AVAILABLE, GPU_INFO
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE, GPU_CONFIG_OVERRIDE = GPU_AVAILABLE, GPU_INFO, GPU_CONFIG
             logger.info(f"💻 Using default GPU setting: {GPU_INFO_OVERRIDE}")
         
         # Find the trained model

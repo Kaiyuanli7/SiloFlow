@@ -1,0 +1,12 @@
+# Alternative GPU packages for different scenarios
+
+# Option 1: OpenCL support (for AMD/Intel GPUs)
+pyopencl>=2023.1
+
+# Option 2: CPU-only optimizations (if no GPU available)
+# These provide good performance without requiring GPU
+polars[all]>=0.20  # Enhanced Polars with all optimizations
+numba>=0.58  # JIT compilation for faster operations
+
+# Option 3: Lightweight GPU detection only
+pynvml>=11.4.1  # NVIDIA GPU monitoring without cuDF
