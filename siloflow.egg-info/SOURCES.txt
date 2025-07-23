@@ -5,6 +5,7 @@ app/__init__.py
 granarypredict/__init__.py
 granarypredict/cleaning.py
 granarypredict/cleaning_helpers.py
+granarypredict/compression_config.py
 granarypredict/compression_utils.py
 granarypredict/config.py
 granarypredict/data_utils.py
@@ -19,7 +20,9 @@ service/automated_processor.py
 service/core.py
 service/granary_pipeline.py
 service/main.py
+service/production_pipeline.py
 service/start_service.py
+service/test_filtering.py
 service/routes/__init__.py
 service/routes/forecast.py
 service/routes/health.py
@@ -41,6 +44,7 @@ service/utils/__init__.py
 service/utils/data_paths.py
 service/utils/database_utils.py
 service/utils/memory_utils.py
+service/utils/silo_filtering.py
 service/utils/validation_utils.py
 siloflow.egg-info/PKG-INFO
 siloflow.egg-info/SOURCES.txt
