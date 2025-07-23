@@ -42,38 +42,43 @@ import numpy as np
 import pathlib
 import logging
 import sys
+import json
 import argparse
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Union
 import asyncio
 import os
 
-# GPU Detection Function (similar to Dashboard.py)
-def detect_gpu_availability():
+# GPU Detection Function (with user override support)
+def detect_gpu_availability(force_enable=False):
     """
     Detect if GPU acceleration is available for LightGBM.
     Returns tuple: (gpu_available, gpu_info)
+    
+    Args:
+        force_enable: If True, attempt to enable GPU even if auto-detection is disabled
     """
-    try:
-        import lightgbm as lgb
-        # Try to create a simple GPU-enabled LightGBM model
-        test_data = lgb.Dataset(np.random.random((10, 5)), label=np.random.random(10))
-        model = lgb.train(
-            params={'objective': 'regression', 'device': 'gpu', 'verbose': -1},
-            train_set=test_data,
-            num_boost_round=1,
-            valid_sets=[test_data],
-            callbacks=[lgb.early_stopping(1), lgb.log_evaluation(0)]
-        )
-        return True, "GPU acceleration available"
-    except Exception as e:
-        # Check if it's specifically a GPU-related error
-        error_msg = str(e).lower()
-        if any(gpu_keyword in error_msg for gpu_keyword in ['gpu', 'cuda', 'opencl', 'device']):
-            return False, f"GPU not available: {e}"
-        else:
-            # Might be some other error, still try CPU fallback
-            return False, f"GPU detection failed, using CPU: {e}"
+    if force_enable:
+        # User requested GPU - try actual detection
+        try:
+            import lightgbm as lgb
+            import numpy as np
+            
+            # Try to create a simple GPU-enabled LightGBM model
+            test_data = lgb.Dataset(np.random.random((10, 5)), label=np.random.random(10))
+            model = lgb.train(
+                params={'objective': 'regression', 'device': 'gpu', 'verbose': -1},
+                train_set=test_data,
+                num_boost_round=1,
+                valid_sets=[test_data],
+                callbacks=[lgb.early_stopping(1), lgb.log_evaluation(0)]
+            )
+            return True, "GPU acceleration enabled by user and verified working"
+        except Exception as e:
+            return False, f"GPU requested by user but not available: {e}"
+    else:
+        # Default behavior - disabled for compatibility
+        return False, "GPU detection disabled by default - using CPU for compatibility"
 
 # Detect GPU availability once at module level
 GPU_AVAILABLE, GPU_INFO = detect_gpu_availability()
@@ -482,10 +487,12 @@ def main():
     train_parser.add_argument("--no-tune", dest="tune", action="store_false", help="Disable Optuna hyperparameter tuning")
     train_parser.add_argument("--trials", type=int, default=100, help="Number of Optuna trials (default: 100)")
     train_parser.add_argument("--timeout", type=int, default=600, help="Optuna timeout in seconds (default: 600)")
+    train_parser.add_argument("--gpu", action="store_true", default=False, help="Force enable GPU acceleration (if available)")
 
     forecast_parser = subparsers.add_parser("forecast", help="Forecast for a granary")
     forecast_parser.add_argument("--granary", required=True, help="Granary name")
     forecast_parser.add_argument("--horizon", type=int, default=7, help="Forecast horizon (days)")
+    forecast_parser.add_argument("--gpu", action="store_true", default=False, help="Force enable GPU acceleration (if available)")
     pipeline_parser = subparsers.add_parser("pipeline", help="Run complete pipeline: ingest, preprocess, and train")
     pipeline_parser.add_argument("--input", required=True, help="Path to raw CSV file")
     pipeline_parser.add_argument("--granary", required=True, help="Granary name to process")
@@ -582,6 +589,19 @@ def main():
 
     elif args.command == "train":
         logger.info(f"Training model for granary: {args.granary}")
+        
+        # Handle GPU override if requested by user
+        if args.gpu:
+            logger.info("🚀 User requested GPU acceleration - attempting to enable...")
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = detect_gpu_availability(force_enable=True)
+            if GPU_AVAILABLE_OVERRIDE:
+                logger.info(f"✅ {GPU_INFO_OVERRIDE}")
+            else:
+                logger.warning(f"⚠️ {GPU_INFO_OVERRIDE}")
+        else:
+            # Use the default GPU detection (disabled)
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = GPU_AVAILABLE, GPU_INFO
+            logger.info(f"💻 Using default GPU setting: {GPU_INFO_OVERRIDE}")
         
         # Find the processed file for this granary (supports both CSV and Parquet)
         processed_file = None
@@ -707,8 +727,8 @@ def main():
                 directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
                 conservative_mode=True,  # Enable conservative predictions
                 stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
-                use_gpu=GPU_AVAILABLE,  # Use auto-detected GPU availability
-                gpu_optimization=GPU_AVAILABLE,  # Enable GPU optimization only if GPU is available
+                use_gpu=GPU_AVAILABLE_OVERRIDE,  # Use user-specified or auto-detected GPU availability
+                gpu_optimization=GPU_AVAILABLE_OVERRIDE,  # Enable GPU optimization based on user choice
                 
                 # Optuna parameter search space (matching Streamlit Dashboard ranges)
                 optuna_param_space={
@@ -841,8 +861,8 @@ def main():
             directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
             conservative_mode=True,  # Enable conservative predictions
             stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
-            use_gpu=GPU_AVAILABLE,  # Use auto-detected GPU availability
-            gpu_optimization=GPU_AVAILABLE  # Enable GPU optimization only if GPU is available
+            use_gpu=GPU_AVAILABLE_OVERRIDE,  # Use user-specified or auto-detected GPU availability
+            gpu_optimization=GPU_AVAILABLE_OVERRIDE  # Enable GPU optimization based on user choice
         )
         
         # Train on full dataset
@@ -915,6 +935,19 @@ def main():
 
     elif args.command == "forecast":
         logger.info(f"Forecasting for granary: {args.granary}")
+        
+        # Handle GPU override if requested by user
+        if args.gpu:
+            logger.info("🚀 User requested GPU acceleration for forecasting - attempting to enable...")
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = detect_gpu_availability(force_enable=True)
+            if GPU_AVAILABLE_OVERRIDE:
+                logger.info(f"✅ {GPU_INFO_OVERRIDE}")
+            else:
+                logger.warning(f"⚠️ {GPU_INFO_OVERRIDE}")
+        else:
+            # Use the default GPU detection (disabled)
+            GPU_AVAILABLE_OVERRIDE, GPU_INFO_OVERRIDE = GPU_AVAILABLE, GPU_INFO
+            logger.info(f"💻 Using default GPU setting: {GPU_INFO_OVERRIDE}")
         
         # Find the trained model
         model_filename = f"{args.granary}_forecast_model.joblib"
