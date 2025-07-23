@@ -1082,38 +1082,77 @@ def main():
         from granarypredict.multi_lgbm import MultiLGBMRegressor
         
         if args.tune:
-            logger.info("🔍 Starting Optuna hyperparameter tuning for granary-specific optimization...")
-            logger.info(f"🎯 Optuna settings: {args.trials} trials, {args.timeout}s timeout")
+            # ⚡ EXTREMELY LARGE DATASET OPTIMIZATION ⚡
+            # Detect dataset size and optimize Optuna accordingly
+            dataset_size = len(X)
+            feature_count = X.shape[1] if hasattr(X, 'shape') else len(X.columns)
             
-            # Use Optuna to find optimal parameters for this specific granary
-            model = MultiLGBMRegressor(
-                # Let Optuna find the best parameters instead of using fixed ones
-                base_params={
-                    "objective": "quantile",
-                    "alpha": 0.5,
-                    "n_jobs": -1,
-                },
-                # Optuna tuning settings
-                optuna_trials=args.trials,
-                optuna_timeout=args.timeout,
-                optuna_sampler="TPE",  # Tree-structured Parzen Estimator (best for continuous parameters)
-                optuna_pruner="MedianPruner",  # Prune unpromising trials early
-                optuna_study_name=f"granary_{args.granary}_tuning",
-                optuna_storage=None,  # In-memory storage (can be changed to persistent storage later)
+            # Adaptive settings based on dataset size
+            if dataset_size > 500_000:
+                # MASSIVE DATASET (>500K rows): Ultra-fast optimization
+                optimized_trials = min(args.trials, 15)  # Max 15 trials for massive datasets
+                optimized_timeout = min(args.timeout, 300)  # Max 5 minutes
+                early_stopping_rounds = 25  # Very aggressive early stopping
+                n_bootstrap_samples = 10   # Minimal bootstrap for speed
+                max_estimators = 500       # Fewer estimators per trial
+                pruning_patience = 3       # Very aggressive pruning
+                logger.info(f"� MASSIVE DATASET MODE: {dataset_size:,} rows → Ultra-fast optimization")
+                logger.info(f"   → {optimized_trials} trials (reduced from {args.trials})")
+                logger.info(f"   → {optimized_timeout}s timeout (reduced from {args.timeout})")
                 
-                # Model settings
-                upper_bound_estimators=2000,
-                early_stopping_rounds=100,
-                uncertainty_estimation=True,
-                n_bootstrap_samples=50,  # Balanced for speed vs accuracy
-                directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
-                conservative_mode=True,  # Enable conservative predictions
-                stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
-                use_gpu=GPU_AVAILABLE_OVERRIDE,  # Use user-specified or auto-detected GPU availability
-                gpu_optimization=GPU_AVAILABLE_OVERRIDE,  # Enable GPU optimization based on user choice
+            elif dataset_size > 200_000:
+                # LARGE DATASET (200K-500K rows): Fast optimization
+                optimized_trials = min(args.trials, 25)  # Max 25 trials
+                optimized_timeout = min(args.timeout, 600)  # Max 10 minutes
+                early_stopping_rounds = 35
+                n_bootstrap_samples = 15
+                max_estimators = 750
+                pruning_patience = 5
+                logger.info(f"🚀 LARGE DATASET MODE: {dataset_size:,} rows → Fast optimization")
+                logger.info(f"   → {optimized_trials} trials (reduced from {args.trials})")
+                logger.info(f"   → {optimized_timeout}s timeout (reduced from {args.timeout})")
                 
-                # Optuna parameter search space (matching Streamlit Dashboard ranges)
-                optuna_param_space={
+            elif dataset_size > 100_000:
+                # MEDIUM DATASET (100K-200K rows): Balanced optimization
+                optimized_trials = min(args.trials, 40)
+                optimized_timeout = min(args.timeout, 900)  # Max 15 minutes
+                early_stopping_rounds = 50
+                n_bootstrap_samples = 25
+                max_estimators = 1000
+                pruning_patience = 7
+                logger.info(f"⚡ MEDIUM DATASET MODE: {dataset_size:,} rows → Balanced optimization")
+                
+            else:
+                # STANDARD DATASET (<100K rows): Full optimization
+                optimized_trials = args.trials
+                optimized_timeout = args.timeout
+                early_stopping_rounds = 100
+                n_bootstrap_samples = 50
+                max_estimators = 2000
+                pruning_patience = 10
+                logger.info(f"📊 STANDARD DATASET MODE: {dataset_size:,} rows → Full optimization")
+            
+            logger.info("🔍 Starting OPTIMIZED Optuna hyperparameter tuning...")
+            logger.info(f"🎯 Adaptive settings: {optimized_trials} trials, {optimized_timeout}s timeout")
+            logger.info(f"🎯 Early stopping: {early_stopping_rounds} rounds, Bootstrap samples: {n_bootstrap_samples}")
+            
+            # OPTIMIZED PARAMETER SPACE: Focus on high-impact parameters for large datasets
+            if dataset_size > 200_000:
+                # Reduced parameter space for large datasets - focus on essentials
+                optuna_param_space = {
+                    'learning_rate': ('float', 0.05, 0.12),      # Narrower range, higher learning rates for speed
+                    'max_depth': ('int', 8, 15),                 # Moderate depths to avoid overfitting
+                    'num_leaves': ('int', 64, 128),              # Balanced range for large data
+                    'subsample': ('float', 0.7, 0.9),            # Higher sampling for stability
+                    'colsample_bytree': ('float', 0.7, 0.9),     # Higher feature sampling
+                    'min_child_samples': ('int', 50, 100),       # Higher minimums for large data
+                    'lambda_l1': ('float', 0.1, 1.0),            # Moderate regularization
+                    'lambda_l2': ('float', 0.1, 1.0),            # Moderate regularization
+                }
+                logger.info("📉 Using REDUCED parameter space optimized for large datasets")
+            else:
+                # Full parameter space for smaller datasets
+                optuna_param_space = {
                     'learning_rate': ('float', 0.01, 0.15),
                     'max_depth': ('int', 6, 25),
                     'num_leaves': ('int', 31, 200),
@@ -1124,9 +1163,113 @@ def main():
                     'lambda_l2': ('float', 0.01, 2.0),
                     'max_bin': ('int', 200, 500),
                 }
+                logger.info("📊 Using FULL parameter space for standard datasets")
+            
+            # Use Optuna to find optimal parameters for this specific granary
+            model = MultiLGBMRegressor(
+                # Let Optuna find the best parameters instead of using fixed ones
+                base_params={
+                    "objective": "quantile",
+                    "alpha": 0.5,
+                    "n_jobs": -1,
+                    # LARGE DATASET OPTIMIZATIONS
+                    "max_bin": 255 if dataset_size > 200_000 else 511,  # Reduce bins for large datasets
+                    "min_data_in_leaf": 50 if dataset_size > 200_000 else 20,  # Higher minimum for stability
+                },
+                # ADAPTIVE Optuna tuning settings
+                optuna_trials=optimized_trials,
+                optuna_timeout=optimized_timeout,
+                optuna_sampler="TPE",  # Tree-structured Parzen Estimator (best for continuous parameters)
+                optuna_pruner="HyperbandPruner",  # More aggressive pruning than MedianPruner
+                optuna_study_name=f"granary_{args.granary}_optimized_tuning",
+                optuna_storage=None,  # In-memory storage (can be changed to persistent storage later)
+                
+                # ADAPTIVE Model settings based on dataset size
+                upper_bound_estimators=max_estimators,
+                early_stopping_rounds=early_stopping_rounds,
+                uncertainty_estimation=True,
+                n_bootstrap_samples=n_bootstrap_samples,  # Adaptive bootstrap samples
+                directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
+                conservative_mode=True,  # Enable conservative predictions
+                stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
+                use_gpu=GPU_AVAILABLE_OVERRIDE,  # Use user-specified or auto-detected GPU availability
+                gpu_optimization=GPU_AVAILABLE_OVERRIDE,  # Enable GPU optimization based on user choice
+                
+                # OPTIMIZED parameter search space
+                optuna_param_space=optuna_param_space,
+                
+                # ADDITIONAL OPTIMIZATIONS for large datasets
+                optuna_pruner_patience=pruning_patience,  # How many poor trials before pruning
+                optuna_n_startup_trials=5,  # Reduce startup trials for faster convergence
+                optuna_n_warmup_steps=3,   # Fewer warmup steps for speed
             )
             
-            logger.info("🚀 Training MultiLGBM model with Optuna optimization...")
+            logger.info("🚀 Training MultiLGBM model with OPTIMIZED Optuna...")
+            
+            # SMART DATA SAMPLING for extremely large datasets during Optuna tuning
+            if dataset_size > 300_000:
+                # Use smart sampling to speed up Optuna trials
+                logger.info("🎯 LARGE DATASET DETECTED: Using smart sampling for Optuna trials")
+                
+                # Sample stratified by time to maintain temporal patterns
+                sample_fraction = min(0.3, 100_000 / dataset_size)  # Cap at 100K samples or 30%
+                sample_size = int(dataset_size * sample_fraction)
+                
+                # Stratified sampling: keep recent data (more important) + random historical
+                recent_fraction = 0.7  # 70% from recent data
+                historical_fraction = 0.3  # 30% from historical data
+                
+                # Sort by time
+                if 'detection_time' in train_df.columns:
+                    train_df_sorted = train_df.sort_values('detection_time')
+                    
+                    # Recent data (last 30% of time range)
+                    recent_size = int(sample_size * recent_fraction)
+                    recent_data = train_df_sorted.tail(int(len(train_df_sorted) * 0.3))
+                    if len(recent_data) > recent_size:
+                        recent_sample = recent_data.sample(n=recent_size, random_state=42)
+                    else:
+                        recent_sample = recent_data
+                    
+                    # Historical data (random from first 70% of time range)
+                    historical_size = sample_size - len(recent_sample)
+                    historical_data = train_df_sorted.head(int(len(train_df_sorted) * 0.7))
+                    if len(historical_data) > historical_size and historical_size > 0:
+                        historical_sample = historical_data.sample(n=historical_size, random_state=42)
+                    else:
+                        historical_sample = historical_data.head(historical_size) if historical_size > 0 else pd.DataFrame()
+                    
+                    # Combine samples
+                    if not historical_sample.empty:
+                        optuna_train_df = pd.concat([recent_sample, historical_sample], ignore_index=True)
+                    else:
+                        optuna_train_df = recent_sample
+                        
+                    logger.info(f"📊 Smart sampling: {len(optuna_train_df):,} samples ({sample_fraction:.1%}) from {dataset_size:,} rows")
+                    logger.info(f"   → Recent data: {len(recent_sample):,} samples")
+                    logger.info(f"   → Historical data: {len(historical_sample):,} samples")
+                else:
+                    # Fallback to random sampling if no time column
+                    optuna_train_df = train_df.sample(n=sample_size, random_state=42)
+                    logger.info(f"📊 Random sampling: {sample_size:,} samples ({sample_fraction:.1%}) from {dataset_size:,} rows")
+                
+                # Prepare sampled features and targets for Optuna
+                X_optuna, Y_optuna = select_feature_target_multi(
+                    df=optuna_train_df,
+                    target_col=TARGET_TEMP_COL,
+                    horizons=HORIZON_TUPLE,
+                    allow_na=False
+                )
+                
+                logger.info(f"🎯 Optuna training data: X={X_optuna.shape}, Y={Y_optuna.shape}")
+                
+                # Use sampled data for Optuna hyperparameter search
+                optuna_X, optuna_Y = X_optuna, Y_optuna
+            else:
+                # Use full dataset for smaller datasets
+                logger.info("📊 Using full dataset for Optuna tuning (dataset not extremely large)")
+                optuna_X, optuna_Y = X, Y
+        
         else:
             logger.info("⚡ Using fixed parameters (no Optuna tuning)...")
             
@@ -1158,18 +1301,36 @@ def main():
             )
         
         # Train the model with or without Optuna hyperparameter optimization
-        model.fit(
-            X=X,
-            Y=Y,
-            eval_set=(anchor_X, anchor_Y),  # Use anchor data for validation
-            eval_metric="l1",
-            verbose=True,
-            anchor_df=anchor_df,  # Pass anchor dataframe for anchor-day methodology
-            horizon_tuple=HORIZON_TUPLE,
-            use_anchor_early_stopping=True,  # Enable anchor-day early stopping
-            balance_horizons=True,  # Apply horizon balancing
-            horizon_strategy="increasing",  # Increasing horizon importance
-        )
+        if args.tune:
+            # PHASE 1: Optuna hyperparameter search (using sampled data for speed)
+            logger.info("🔍 PHASE 1: Optuna hyperparameter search on sampled data...")
+            model.fit(
+                X=optuna_X,  # Use sampled data for Optuna
+                Y=optuna_Y,  # Use sampled data for Optuna
+                eval_set=(anchor_X, anchor_Y),  # Use anchor data for validation
+                eval_metric="l1",
+                verbose=True,
+                anchor_df=anchor_df,  # Pass anchor dataframe for anchor-day methodology
+                horizon_tuple=HORIZON_TUPLE,
+                use_anchor_early_stopping=True,  # Enable anchor-day early stopping
+                balance_horizons=True,  # Apply horizon balancing
+                horizon_strategy="increasing",  # Increasing horizon importance
+            )
+        else:
+            # No tuning: train directly on full data
+            logger.info("⚡ Training with fixed parameters on full dataset...")
+            model.fit(
+                X=X,
+                Y=Y,
+                eval_set=(anchor_X, anchor_Y),  # Use anchor data for validation
+                eval_metric="l1",
+                verbose=True,
+                anchor_df=anchor_df,  # Pass anchor dataframe for anchor-day methodology
+                horizon_tuple=HORIZON_TUPLE,
+                use_anchor_early_stopping=True,  # Enable anchor-day early stopping
+                balance_horizons=True,  # Apply horizon balancing
+                horizon_strategy="increasing",  # Increasing horizon importance
+            )
         
         # Log the results of hyperparameter tuning if enabled
         if args.tune:
@@ -1180,7 +1341,8 @@ def main():
             # Log Optuna study statistics
             if hasattr(model, 'optuna_study_') and model.optuna_study_ is not None:
                 study = model.optuna_study_
-                logger.info(f"📊 Optuna completed {len(study.trials)} trials")
+                completed_trials = len([t for t in study.trials if t.state.name == 'COMPLETE'])
+                logger.info(f"📊 Optuna completed {completed_trials} successful trials out of {len(study.trials)} total")
                 logger.info(f"📈 Best trial number: {study.best_trial.number}")
                 
                 # Show parameter importance if available
@@ -1191,13 +1353,76 @@ def main():
                         logger.info(f"   {param}: {importance_val:.3f}")
                 except Exception as e:
                     logger.warning(f"Could not get parameter importance: {e}")
+            
+            # PHASE 2: Train final model on FULL dataset with optimized parameters
+            logger.info("🏁 PHASE 2: Training final model on FULL dataset with optimized parameters...")
+            
+            # Get the best parameters found by Optuna
+            if hasattr(model, 'best_params_') and model.best_params_:
+                best_params = model.best_params_.copy()
+                best_iteration = model.best_iteration_ if hasattr(model, 'best_iteration_') else max_estimators
+                logger.info(f"🎯 Using optimized parameters: {best_params}")
+                logger.info(f"� Using optimized iteration count: {best_iteration}")
+            else:
+                # Fallback to reasonable defaults if Optuna failed
+                logger.warning("⚠️ No optimal parameters found, using fallback defaults")
+                best_params = {
+                    "learning_rate": 0.08,
+                    "max_depth": 10,
+                    "num_leaves": 80,
+                    "subsample": 0.85,
+                    "colsample_bytree": 0.85,
+                    "min_child_samples": 30,
+                    "lambda_l1": 0.5,
+                    "lambda_l2": 0.5,
+                }
+                best_iteration = 800  # Conservative default
+            
+            # Create final model with optimized parameters
+            final_params = {
+                "objective": "quantile",
+                "alpha": 0.5,
+                "n_jobs": -1,
+                "max_bin": 255 if dataset_size > 200_000 else 511,
+                "min_data_in_leaf": 50 if dataset_size > 200_000 else 20,
+                "n_estimators": best_iteration,
+            }
+            final_params.update(best_params)
+            
+            logger.info(f"🎯 Final model parameters: {final_params}")
+            
+            final_model = MultiLGBMRegressor(
+                base_params=final_params,
+                upper_bound_estimators=best_iteration,
+                early_stopping_rounds=0,  # No early stopping for final model
+                uncertainty_estimation=True,
+                n_bootstrap_samples=n_bootstrap_samples//2,  # Reduce for final model speed
+                directional_feature_boost=2.0,
+                conservative_mode=True,
+                stability_feature_boost=3.0,
+                use_gpu=GPU_AVAILABLE_OVERRIDE,
+                gpu_optimization=GPU_AVAILABLE_OVERRIDE
+            )
+            
+            # Train final model on FULL dataset
+            logger.info(f"🚀 Training final model on FULL dataset ({len(X):,} rows)...")
+            final_model.fit(
+                X=X,  # Use FULL dataset
+                Y=Y,  # Use FULL dataset
+                eval_set=None,  # No validation set for final model
+                eval_metric="l1",
+                verbose=True,
+                balance_horizons=True,
+                horizon_strategy="increasing",
+            )
+            
+            # Use final model for predictions and saving
+            model = final_model
+            logger.info("✅ Final model training completed on full dataset")
         else:
-            logger.info("⚡ Model trained with fixed parameters")
+            logger.info("⚡ Model trained with fixed parameters on full dataset")
         
-        # Now train final model on full dataset with best iteration and best parameters
-        logger.info("🏁 Training final model on full dataset with optimized parameters...")
-        
-        # Prepare full dataset features and targets
+        # Prepare full dataset features and targets for evaluation
         full_X, full_Y = select_feature_target_multi(
             df=df.copy(),
             target_col=TARGET_TEMP_COL,
@@ -1205,61 +1430,21 @@ def main():
             allow_na=False
         )
         
-        # Get the best parameters found by Optuna, or use defaults if tuning failed
-        if hasattr(model, 'best_params_') and model.best_params_:
-            best_params = model.best_params_.copy()
-        else:
-            # Fallback to reasonable defaults if Optuna failed
-            logger.warning("⚠️ No optimal parameters found, using fallback defaults")
-            best_params = {
-                "learning_rate": 0.05,
-                "max_depth": 8,
-                "num_leaves": 64,
-                "subsample": 0.8,
-                "colsample_bytree": 0.8,
-                "min_child_samples": 20,
-                "lambda_l1": 0.1,
-                "lambda_l2": 0.1,
-                "max_bin": 255,
-            }
+        # Generate predictions for the anchor data to calculate metrics
+        logger.info("Generating forecasts for anchor validation data...")
+        predictions = model.predict(anchor_X)
         
-        # Add required base parameters
-        final_params = {
-            "objective": "quantile",
-            "alpha": 0.5,
-            "n_jobs": -1,
-            "n_estimators": model.best_iteration_ if hasattr(model, 'best_iteration_') else 1000,
-        }
-        final_params.update(best_params)
+        # Calculate metrics on the anchor data
+        from sklearn.metrics import mean_absolute_error
+        mae_scores = []
+        for h in range(7):
+            if h < predictions.shape[1] and h < anchor_Y.shape[1]:
+                mae = mean_absolute_error(anchor_Y.iloc[:, h], predictions[:, h])
+                mae_scores.append(mae)
+                logger.info(f"h+{h+1} MAE: {mae:.3f}°C")
         
-        logger.info(f"🎯 Final model parameters: {final_params}")
-        
-        final_model = MultiLGBMRegressor(
-            base_params=final_params,
-            upper_bound_estimators=model.best_iteration_ if hasattr(model, 'best_iteration_') else 1000,
-            early_stopping_rounds=0,  # No early stopping for final model
-            uncertainty_estimation=True,
-            n_bootstrap_samples=25,  # Optimized for speed
-            directional_feature_boost=2.0,  # 2x boost for directional features (matching Dashboard)
-            conservative_mode=True,  # Enable conservative predictions
-            stability_feature_boost=3.0,  # 3x boost for stability features (matching Dashboard)
-            use_gpu=GPU_AVAILABLE_OVERRIDE,  # Use user-specified or auto-detected GPU availability
-            gpu_optimization=GPU_AVAILABLE_OVERRIDE  # Enable GPU optimization based on user choice
-        )
-        
-        # Train on full dataset
-        final_model.fit(
-            X=full_X,
-            Y=full_Y,
-            eval_set=None,  # No validation set for final model
-            eval_metric="l1",
-            verbose=True,
-            balance_horizons=True,  # Apply horizon balancing
-            horizon_strategy="increasing",  # Increasing horizon importance
-        )
-        
-        # Use final model for predictions
-        model = final_model
+        avg_mae = sum(mae_scores) / len(mae_scores) if mae_scores else 0
+        logger.info(f"Average MAE across horizons: {avg_mae:.3f}°C")
         
         # Generate predictions for the anchor data to calculate metrics
         logger.info("Generating forecasts for anchor validation data...")
