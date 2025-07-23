@@ -71,17 +71,15 @@ def load_data_optimized(file_path: str) -> pd.DataFrame:
     """
     file_path = Path(file_path)
     file_size_mb = file_path.stat().st_size / (1024 * 1024)
-    
-    if HAS_POLARS and file_size_mb > 100:  # Use Polars for files > 100MB
+    # Force Polars for all DataFrame operations if available
+    if HAS_POLARS:
         try:
-            logger.info(f"*** POLARS BACKEND: Loading {file_size_mb:.1f}MB file with Polars for optimal performance")
-            print(f"*** POLARS BACKEND: Loading {file_size_mb:.1f}MB file with Polars for optimal performance")
-            
+            logger.info(f"*** POLARS BACKEND: Loading {file_size_mb:.1f}MB file with Polars (forced for all files)")
+            print(f"*** POLARS BACKEND: Loading {file_size_mb:.1f}MB file with Polars (forced for all files)")
             if file_path.suffix.lower() == '.parquet':
                 df_pl = pl.read_parquet(file_path)
             else:
                 df_pl = pl.read_csv(file_path)
-            
             # Convert to pandas for compatibility
             df = df_pl.to_pandas()
             logger.info(f"*** POLARS SUCCESS: Loaded and converted to pandas (shape: {df.shape})")
@@ -90,13 +88,11 @@ def load_data_optimized(file_path: str) -> pd.DataFrame:
         except Exception as e:
             logger.warning(f"*** POLARS FALLBACK: Polars loading failed, using pandas: {e}")
             print(f"*** POLARS FALLBACK: Polars loading failed, using pandas: {e}")
-            # Fallback to pandas
             from granarypredict.ingestion import read_granary_csv
             return read_granary_csv(file_path)
     else:
-        backend_reason = "file too small" if HAS_POLARS else "Polars not available"
-        logger.info(f"*** PANDAS BACKEND: Loading {file_size_mb:.1f}MB file with pandas ({backend_reason})")
-        print(f"*** PANDAS BACKEND: Loading {file_size_mb:.1f}MB file with pandas ({backend_reason})")
+        logger.info(f"*** PANDAS BACKEND: Loading {file_size_mb:.1f}MB file with pandas (Polars not available)")
+        print(f"*** PANDAS BACKEND: Loading {file_size_mb:.1f}MB file with pandas (Polars not available)")
         from granarypredict.ingestion import read_granary_csv
         return read_granary_csv(file_path)
 
@@ -107,7 +103,7 @@ def add_lags_optimized(df: pd.DataFrame, lags: list = [1, 2, 3, 7],
     Memory-optimized lag computation that prevents allocation errors.
     Uses Polars for massive performance improvement and memory efficiency.
     """
-    if HAS_POLARS and len(df) > 50_000:  # Use Polars for large datasets
+    if HAS_POLARS:
         try:
             logger.info(f"*** POLARS BACKEND: Using Polars for lag computation on {len(df):,} rows")
             print(f"*** POLARS BACKEND: Using Polars for lag computation on {len(df):,} rows")
@@ -164,7 +160,7 @@ def add_lags_optimized(df: pd.DataFrame, lags: list = [1, 2, 3, 7],
 
 def create_time_features_optimized(df: pd.DataFrame, timestamp_col: str = "detection_time") -> pd.DataFrame:
     """Polars-optimized time feature creation - 5-10x faster than pandas."""
-    if HAS_POLARS and len(df) > 50_000:
+    if HAS_POLARS:
         try:
             logger.info(f"*** POLARS BACKEND: Using Polars for time features on {len(df):,} rows")
             print(f"*** POLARS BACKEND: Using Polars for time features on {len(df):,} rows")
@@ -217,7 +213,7 @@ def create_time_features_optimized(df: pd.DataFrame, timestamp_col: str = "detec
 def add_rolling_stats_optimized(df: pd.DataFrame, window_days: int = 7, 
                                temp_col: str = "temperature_grain") -> pd.DataFrame:
     """Polars-optimized rolling statistics - 5-20x faster than pandas."""
-    if HAS_POLARS and len(df) > 50_000:
+    if HAS_POLARS:
         try:
             logger.info(f"*** POLARS BACKEND: Using Polars for rolling statistics on {len(df):,} rows")
             print(f"*** POLARS BACKEND: Using Polars for rolling statistics on {len(df):,} rows")
