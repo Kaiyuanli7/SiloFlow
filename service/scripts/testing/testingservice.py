@@ -3836,6 +3836,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             # Set environment to avoid ML library initialization warnings
             env = os.environ.copy()
             env['SILOFLOW_INGEST_ONLY'] = '1'  # Signal to avoid ML library imports
+            env['SILOFLOW_DISABLE_PARALLEL'] = '1'  # Disable parallel processing for batch operations
             env['PYTHONWARNINGS'] = 'ignore::UserWarning'  # Suppress harmless warnings
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=working_dir, env=env)
@@ -3965,6 +3966,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             # Set environment to avoid ML operations and warnings
             env = os.environ.copy()
             env['SILOFLOW_PREPROCESS_ONLY'] = '1'  # Signal to avoid ML operations
+            env['SILOFLOW_DISABLE_PARALLEL'] = '1'  # Disable parallel processing for batch operations
             env['PYTHONWARNINGS'] = 'ignore'  # Suppress all warnings
             env['PYTHONUNBUFFERED'] = '1'  # Ensure output is not buffered
             
@@ -4175,6 +4177,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             env = os.environ.copy()
             env["SILOFLOW_NO_SUBFOLDER_CREATION"] = "1"
             env["SILOFLOW_TRAIN_ONLY"] = "1"  # Signal this is training-only mode
+            env["SILOFLOW_DISABLE_PARALLEL"] = "1"  # Disable parallel processing for batch operations
             
             # Calculate timeout based on tuning settings (with buffer)
             process_timeout = 900 if use_tuning else 600  # 15 min for tuning, 10 min for fixed params
@@ -4259,6 +4262,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             env = os.environ.copy()
             env["SILOFLOW_FORECAST_ONLY"] = "1"
             env["SILOFLOW_NO_SUBFOLDER_CREATION"] = "1"
+            env["SILOFLOW_DISABLE_PARALLEL"] = "1"  # Disable parallel processing for batch operations
             env["PYTHONWARNINGS"] = "ignore"  # Suppress warnings during forecasting
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=working_dir, env=env)
