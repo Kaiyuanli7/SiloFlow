@@ -1,0 +1,9 @@
+Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
+Collecting cudf-cu11
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/86/89/f06fad4b950cb9bf6b3fa1e6e8dd38d0610ac513974fb5d97cd02d728f56/cudf_cu11-25.6.0.tar.gz (2.7 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'error'
