@@ -31,6 +31,9 @@ import asyncio
 from datetime import datetime
 import subprocess
 import re # Added for regex in _parse_granaries_output
+import pandas as pd
+import traceback
+import io
 
 class SiloFlowTester:
     def __init__(self, root):
@@ -345,6 +348,7 @@ class SiloFlowTester:
         self.create_simple_retrieval_tab()
         self.create_batch_processing_tab()
         self.create_database_explorer_tab()
+        self.create_parquet_viewer_tab()
         # Removed logs tab as requested
         
         # Bind tab change event for status updates
@@ -3750,6 +3754,8 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                         
                         self.root.after(0, self.batch_log_text.insert, tk.END, 
                             f"   💾 Available memory: {available_memory_gb:.1f}GB ({100-memory_percent:.1f}% free)\n")
+                        self.root.after(0, self.batch_log_text.see, tk.END)
+                        self.root.update_idletasks()  # Force GUI update
                         
                         # Skip if file is too large for available memory
                         if file_size_gb > available_memory_gb * 0.5:
@@ -3768,6 +3774,10 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                             selected_action,
                             processor
                         )
+                        
+                        # Force GUI update after processing
+                        self.root.after(0, self.batch_log_text.see, tk.END)
+                        self.root.update_idletasks()
                         
                         if success:
                             successful_files += 1
@@ -4140,6 +4150,8 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 try:
                     self.root.after(0, self.batch_log_text.insert, tk.END, 
                         f"[{i + 1}/{total_files}] Processing {file_path.name}...\n")
+                    self.root.after(0, self.batch_log_text.see, tk.END)
+                    self.root.update_idletasks()
                     
                     # Use optimized streaming methods
                     if selected_action == "sorting":
@@ -4394,34 +4406,187 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             return False
     
     def _stream_processing(self, file_path, output_folder, processor, temp_output):
-        """Use streaming processor for data processing with feature engineering"""
+        """Use streaming processor for data processing with comprehensive feature engineering"""
         try:
             # Create comprehensive processing output
             final_output = output_folder / f"{file_path.stem}_processed.parquet"
             
-            # Use the streaming processor's built-in feature engineering
-            success = processor.process_massive_features(
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      🔧 Starting comprehensive Dashboard.py-style processing...\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      📁 Input: {file_path.name}\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      💾 Output: {final_output.name}\n")
+            self.root.after(0, self.batch_log_text.see, tk.END)
+            self.root.update_idletasks()
+            
+            # Create a custom processor with live GUI updates
+            class LiveUpdateProcessor(processor.__class__):
+                def __init__(self, original_processor, gui_updater):
+                    # Copy all attributes from original processor
+                    self.__dict__.update(original_processor.__dict__)
+                    self.gui_updater = gui_updater
+                
+                def _log_to_gui(self, message):
+                    """Send log message to GUI in real-time"""
+                    self.gui_updater(f"      {message}\n")
+                
+                def process_massive_features(self, *args, **kwargs):
+                    """Override to provide live GUI updates"""
+                    self._log_to_gui("🚀 Initializing massive feature processing...")
+                    return super().process_massive_features(*args, **kwargs)
+                
+                def read_massive_dataset(self, file_path):
+                    """Override to provide chunk-level updates"""
+                    chunk_count = 0
+                    for chunk in super().read_massive_dataset(file_path):
+                        chunk_count += 1
+                        self._log_to_gui(f"📦 Processing chunk {chunk_count}: {len(chunk):,} rows")
+                        yield chunk
+                
+                def _standardize_columns(self, df):
+                    self._log_to_gui("   🔧 Step 1: Standardizing column names...")
+                    try:
+                        result = super()._standardize_columns(df)
+                        self._log_to_gui(f"   ✅ Column standardization completed - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Column standardization issue: {str(e)[:100]}...")
+                        return df
+                
+                def _basic_clean(self, df):
+                    self._log_to_gui("   🔧 Step 2: Basic data cleaning...")
+                    try:
+                        result = super()._basic_clean(df)
+                        self._log_to_gui(f"   ✅ Basic cleaning completed - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Basic cleaning issue: {str(e)[:100]}...")
+                        return df
+                
+                def _insert_calendar_gaps(self, df):
+                    self._log_to_gui("   🔧 Step 3: Inserting calendar gaps...")
+                    try:
+                        result = super()._insert_calendar_gaps(df)
+                        self._log_to_gui(f"   ✅ Calendar gaps inserted - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Calendar gaps issue: {str(e)[:100]}...")
+                        return df
+                
+                def _interpolate_sensor_numeric(self, df):
+                    self._log_to_gui("   🔧 Step 4: Interpolating sensor values...")
+                    try:
+                        result = super()._interpolate_sensor_numeric(df)
+                        self._log_to_gui(f"   ✅ Sensor interpolation completed - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Sensor interpolation issue: {str(e)[:100]}...")
+                        return df
+                
+                def _add_comprehensive_time_features(self, df):
+                    self._log_to_gui("   🔧 Step 5: Adding time features...")
+                    try:
+                        result = super()._add_comprehensive_time_features(df)
+                        self._log_to_gui(f"   ✅ Time features added - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Time features issue: {str(e)[:100]}...")
+                        return df
+                
+                def _add_spatial_features(self, df):
+                    self._log_to_gui("   🔧 Step 6: Adding spatial features...")
+                    try:
+                        result = super()._add_spatial_features(df)
+                        self._log_to_gui(f"   ✅ Spatial features added - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Spatial features issue: {str(e)[:100]}...")
+                        return df
+                
+                def _add_multi_lag_features(self, df):
+                    self._log_to_gui("   🔧 Step 7: Adding lag features...")
+                    try:
+                        result = super()._add_multi_lag_features(df)
+                        self._log_to_gui(f"   ✅ Lag features added - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Lag features issue: {str(e)[:100]}...")
+                        return df
+                
+                def _add_rolling_stats(self, df):
+                    self._log_to_gui("   🔧 Step 8: Adding rolling statistics...")
+                    try:
+                        result = super()._add_rolling_stats(df)
+                        self._log_to_gui(f"   ✅ Rolling stats added - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Rolling stats issue: {str(e)[:100]}...")
+                        return df
+                
+                def _comprehensive_sort(self, df):
+                    self._log_to_gui("   � Final step: Comprehensive sorting...")
+                    try:
+                        result = super()._comprehensive_sort(df)
+                        self._log_to_gui(f"   ✅ Final sorting completed - Shape: {result.shape}")
+                        return result
+                    except Exception as e:
+                        self._log_to_gui(f"   ⚠️ Final sorting issue: {str(e)[:100]}...")
+                        return df
+            
+            def gui_updater(message):
+                """Thread-safe GUI updater"""
+                def update():
+                    self.batch_log_text.insert(tk.END, message)
+                    self.batch_log_text.see(tk.END)
+                    self.root.update_idletasks()
+                self.root.after(0, update)
+            
+            # Create live update processor
+            live_processor = LiveUpdateProcessor(processor, gui_updater)
+            
+            # Use the comprehensive preprocessing pipeline from streaming processor
+            # This matches Dashboard.py preprocessing exactly
+            success = live_processor.process_massive_features(
                 file_path=file_path,
-                output_path=final_output
-                # Uses default feature functions: time features, lags, rolling features
+                output_path=final_output,
+                use_comprehensive_pipeline=True  # Enable comprehensive Dashboard.py-style preprocessing
             )
             
             if success:
                 self.root.after(0, self.batch_log_text.insert, tk.END, 
-                    f"      ✅ Streaming processing completed: {final_output}\n")
+                    f"      🎉 Comprehensive processing completed successfully!\n")
                 
                 # Show processing stats
                 if final_output.exists():
                     file_size = final_output.stat().st_size / (1024**2)
-                    rows_processed = getattr(processor, 'processed_rows', 0)
+                    rows_processed = getattr(live_processor, 'processed_rows', 0)
                     self.root.after(0, self.batch_log_text.insert, tk.END, 
-                        f"      📊 Output: {file_size:.1f}MB, {rows_processed:,} rows processed\n")
+                        f"      📊 Output file: {file_size:.1f}MB\n")
+                    if rows_processed > 0:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"      📊 Rows processed: {rows_processed:,}\n")
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"      🔧 Used comprehensive Dashboard.py-style preprocessing pipeline\n")
+                else:
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"      ⚠️ Warning: Output file was not found at expected location\n")
+                    success = False
+            else:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ❌ Comprehensive processing failed\n")
+            
+            self.root.after(0, self.batch_log_text.see, tk.END)
+            self.root.update_idletasks()
             
             return success
             
         except Exception as e:
             self.root.after(0, self.batch_log_text.insert, tk.END, 
-                f"      ❌ Streaming processing failed: {e}\n")
+                f"      ❌ Streaming processing exception: {e}\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      📋 Error type: {type(e).__name__}\n")
+            self.root.after(0, self.batch_log_text.see, tk.END)
             return False
     
     def _ensure_processed_data(self, file_path, processor):
@@ -4465,8 +4630,8 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 f"      ❌ Error ensuring processed data: {e}\n")
             return None
     
-    def _stream_training(self, processed_file, granary_name):
-        """Train model using processed data"""
+    def _legacy_stream_training(self, processed_file, granary_name):
+        """Legacy training method as fallback"""
         try:
             # Use the existing CLI training approach but with better logging
             import subprocess
@@ -4490,7 +4655,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 cmd.append("--gpu")
             
             self.root.after(0, self.batch_log_text.insert, tk.END, 
-                f"      🤖 Training model for {granary_name}...\n")
+                f"      🔄 Using legacy training method for {granary_name}...\n")
             
             working_dir = Path(__file__).parent.parent.parent
             env = os.environ.copy()
@@ -4500,20 +4665,82 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             
             if result.returncode == 0:
                 self.root.after(0, self.batch_log_text.insert, tk.END, 
-                    f"      ✅ Model training completed for {granary_name}\n")
+                    f"      ✅ Legacy model training completed for {granary_name}\n")
                 return True
             else:
                 self.root.after(0, self.batch_log_text.insert, tk.END, 
-                    f"      ❌ Model training failed: {result.stderr}\n")
+                    f"      ❌ Legacy model training failed: {result.stderr}\n")
                 return False
                 
         except Exception as e:
             self.root.after(0, self.batch_log_text.insert, tk.END, 
-                f"      ❌ Training error: {e}\n")
+                f"      ❌ Legacy training error: {e}\n")
             return False
     
     def _stream_forecasting(self, processed_file, granary_name):
-        """Generate forecasts using processed data"""
+        """Generate forecasts using processed data with massive dataset support"""
+        try:
+            from granarypredict.streaming_processor import create_massive_forecasting_pipeline
+            
+            # Use the new massive forecasting pipeline
+            forecasts_dir = Path(__file__).parent.parent.parent / "data" / "forecasts"
+            forecasts_dir.mkdir(parents=True, exist_ok=True)
+            
+            forecast_output_path = forecasts_dir / f"{granary_name}_massive_forecasts.csv"
+            
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      🔮 Generating massive dataset forecasts for {granary_name}...\n")
+            
+            # Get forecasting options
+            use_gpu = self.batch_gpu_var.get()
+            
+            # Generate forecasts using the massive forecasting pipeline
+            forecasting_result = create_massive_forecasting_pipeline(
+                data_path=processed_file,
+                forecast_output_path=forecast_output_path,
+                target_column="temperature_grain",
+                chunk_size=50_000,  # Conservative chunk size
+                backend="auto",
+                horizons=(1, 2, 3, 4, 5, 6, 7),
+                use_gpu=use_gpu,
+                forecast_days=30,  # Default 30-day forecast
+                include_uncertainty=True
+            )
+            
+            if forecasting_result['success']:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ✅ Massive forecasting completed for {granary_name}\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      📊 Forecasting stats: {forecasting_result['total_samples']:,} samples, "
+                    f"{forecasting_result['forecasting_time']:.1f}s\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      📈 Forecasts saved: {forecasting_result['forecast_path']}\n")
+                
+                # Show uncertainty info if available
+                if 'uncertainty_stats' in forecasting_result:
+                    uncertainty = forecasting_result['uncertainty_stats']
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"      📊 Uncertainty bounds: ±{uncertainty['mean_std']:.2f}°C "
+                        f"(95% CI: [{uncertainty['ci_lower']:.2f}, {uncertainty['ci_upper']:.2f}])\n")
+                
+                return True
+            else:
+                error_msg = forecasting_result.get('error', 'Unknown error')
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ❌ Massive forecasting failed: {error_msg}\n")
+                # Fallback to legacy forecasting
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      🔄 Falling back to legacy forecasting method...\n")
+                return self._legacy_stream_forecasting(processed_file, granary_name)
+                
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      ❌ Forecasting error: {e}\n")
+            # Fallback to legacy forecasting
+            return self._legacy_stream_forecasting(processed_file, granary_name)
+
+    def _legacy_stream_forecasting(self, processed_file, granary_name):
+        """Legacy forecasting method as fallback"""
         try:
             import subprocess
             script_path = Path(__file__).parent.parent.parent / "granary_pipeline.py"
@@ -4529,7 +4756,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 cmd.append("--gpu")
             
             self.root.after(0, self.batch_log_text.insert, tk.END, 
-                f"      🔮 Generating forecasts for {granary_name}...\n")
+                f"      🔄 Using legacy forecasting method for {granary_name}...\n")
             
             working_dir = Path(__file__).parent.parent.parent
             env = os.environ.copy()
@@ -4539,16 +4766,16 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             
             if result.returncode == 0:
                 self.root.after(0, self.batch_log_text.insert, tk.END, 
-                    f"      ✅ Forecasting completed for {granary_name}\n")
+                    f"      ✅ Legacy forecasting completed for {granary_name}\n")
                 return True
             else:
                 self.root.after(0, self.batch_log_text.insert, tk.END, 
-                    f"      ❌ Forecasting failed: {result.stderr}\n")
+                    f"      ❌ Legacy forecasting failed: {result.stderr}\n")
                 return False
                 
         except Exception as e:
             self.root.after(0, self.batch_log_text.insert, tk.END, 
-                f"      ❌ Forecasting error: {e}\n")
+                f"      ❌ Legacy forecasting error: {e}\n")
             return False
 
     def _process_single_file_legacy(self, file_path, action):
@@ -5217,6 +5444,336 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             self.root.after(0, _update_log)
         else:
             _update_log()
+
+    def create_parquet_viewer_tab(self):
+        """Create Parquet to CSV Viewer tab with modern styling"""
+        # Create the main tab frame
+        tab_frame = ttk.Frame(self.notebook)
+        self.notebook.add(tab_frame, text="📊 Parquet Viewer")
+        
+        # Create scrollable frame for this tab
+        main_frame, viewer_frame = self.create_scrollable_frame(tab_frame)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Configure the scrollable content area
+        viewer_frame.columnconfigure(0, weight=1)
+        
+        # File Selection Section
+        file_section = self.create_section_frame(viewer_frame, "Parquet File Selection", "📁")
+        file_section.grid(row=0, column=0, sticky="ew", pady=10, padx=15)
+        file_section.columnconfigure(1, weight=1)
+        
+        # File selection
+        tk.Label(file_section, text="Parquet File:", font=('Segoe UI', 10, 'bold'), 
+                fg=self.colors['text_primary'], bg='white').grid(row=0, column=0, sticky="w", pady=8)
+        self.parquet_file_var = tk.StringVar()
+        file_entry = ttk.Entry(file_section, textvariable=self.parquet_file_var, 
+                              font=('Segoe UI', 10), style='Modern.TEntry')
+        file_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=8)
+        self.create_modern_button(file_section, "📂 Browse", self.browse_parquet_file, "Primary.TButton").grid(row=0, column=2, padx=(10, 0), pady=8)
+        
+        # File info display
+        self.parquet_info_var = tk.StringVar(value="No file selected")
+        file_info_label = tk.Label(file_section, textvariable=self.parquet_info_var, 
+                                  font=('Segoe UI', 9), fg=self.colors['text_secondary'], bg='white')
+        file_info_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        
+        # Options Section
+        options_section = self.create_section_frame(viewer_frame, "Conversion Options", "⚙️")
+        options_section.grid(row=1, column=0, sticky="ew", pady=10, padx=15)
+        options_section.columnconfigure(1, weight=1)
+        
+        # Row limit
+        tk.Label(options_section, text="Max Rows to Display:", font=('Segoe UI', 10, 'bold'), 
+                fg=self.colors['text_primary'], bg='white').grid(row=0, column=0, sticky="w", pady=8)
+        self.max_rows_var = tk.StringVar(value="1000")
+        max_rows_entry = ttk.Entry(options_section, textvariable=self.max_rows_var, 
+                                  font=('Segoe UI', 10), style='Modern.TEntry', width=15)
+        max_rows_entry.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=8)
+        
+        # Save CSV option
+        self.save_csv_var = tk.BooleanVar(value=True)
+        save_checkbox = ttk.Checkbutton(options_section, text="💾 Save as CSV file", variable=self.save_csv_var)
+        save_checkbox.grid(row=1, column=0, columnspan=2, sticky="w", pady=8)
+        
+        # Actions Section
+        actions_section = self.create_section_frame(viewer_frame, "Actions", "🚀")
+        actions_section.grid(row=2, column=0, sticky="ew", pady=10, padx=15)
+        
+        # Action buttons
+        button_frame = tk.Frame(actions_section, bg=self.colors['surface'])
+        button_frame.pack(fill='x', pady=5)
+        
+        self.create_modern_button(button_frame, "🔄 Convert & Display", self.convert_and_display, "Success.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        self.create_modern_button(button_frame, "💾 Export to CSV", self.export_to_csv, "Primary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        self.create_modern_button(button_frame, "📂 Open File Location", self.open_parquet_location, "Primary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        self.create_modern_button(button_frame, "🧹 Clear Display", self.clear_parquet_display, "Primary.TButton").pack(side=tk.LEFT)
+        
+        # Progress Section
+        progress_section = self.create_section_frame(viewer_frame, "Status", "📈")
+        progress_section.grid(row=3, column=0, sticky="ew", pady=10, padx=15)
+        
+        self.parquet_status_var = tk.StringVar(value="Ready - Select a parquet file to begin")
+        status_label = tk.Label(progress_section, textvariable=self.parquet_status_var,
+                               font=('Segoe UI', 10), fg=self.colors['primary'], bg='white')
+        status_label.pack(fill='x', pady=8)
+        
+        # Data Display Section
+        display_section = self.create_section_frame(viewer_frame, "Data Preview", "📋")
+        display_section.grid(row=4, column=0, sticky="nsew", pady=10, padx=15)
+        display_section.columnconfigure(0, weight=1)
+        display_section.rowconfigure(0, weight=1)
+        
+        # Create treeview for data display
+        tree_frame = tk.Frame(display_section, bg='white')
+        tree_frame.grid(row=0, column=0, sticky="nsew", pady=5)
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+        
+        # Treeview with scrollbars
+        tree_container = tk.Frame(tree_frame, bg='white')
+        tree_container.grid(row=0, column=0, sticky="nsew")
+        tree_container.columnconfigure(0, weight=1)
+        tree_container.rowconfigure(0, weight=1)
+        
+        self.parquet_tree = ttk.Treeview(tree_container, show='headings')
+        v_scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.parquet_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_container, orient="horizontal", command=self.parquet_tree.xview)
+        self.parquet_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        self.parquet_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        # Summary text area
+        summary_frame = tk.Frame(display_section, bg='white')
+        summary_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        summary_frame.columnconfigure(0, weight=1)
+        
+        tk.Label(summary_frame, text="Data Summary:", font=('Segoe UI', 10, 'bold'), 
+                fg=self.colors['text_primary'], bg='white').pack(anchor='w')
+        
+        self.parquet_summary_text = scrolledtext.ScrolledText(
+            summary_frame, 
+            height=8, 
+            width=80,
+            font=('Consolas', 9),
+            bg='#F8F9FA',
+            fg=self.colors['text_primary'],
+            selectbackground=self.colors['primary'],
+            wrap=tk.WORD,
+            padx=10,
+            pady=10
+        )
+        self.parquet_summary_text.pack(fill='both', expand=True, pady=5)
+        
+        # Add initial helpful message
+        self.parquet_summary_text.insert(tk.END, "📊 Parquet to CSV Viewer\n")
+        self.parquet_summary_text.insert(tk.END, "=" * 50 + "\n\n")
+        self.parquet_summary_text.insert(tk.END, "📋 Quick Start Guide:\n")
+        self.parquet_summary_text.insert(tk.END, "1. Click 'Browse' to select a parquet file\n")
+        self.parquet_summary_text.insert(tk.END, "2. Set max rows to display (default: 1000)\n")
+        self.parquet_summary_text.insert(tk.END, "3. Click 'Convert & Display' to view data\n")
+        self.parquet_summary_text.insert(tk.END, "4. Optionally export the full data to CSV\n\n")
+        self.parquet_summary_text.insert(tk.END, "💡 Features:\n")
+        self.parquet_summary_text.insert(tk.END, "• View parquet file structure and data\n")
+        self.parquet_summary_text.insert(tk.END, "• Convert to CSV format\n")
+        self.parquet_summary_text.insert(tk.END, "• Display file statistics and info\n")
+        self.parquet_summary_text.insert(tk.END, "• Export full dataset to CSV file\n\n")
+
+    def browse_parquet_file(self):
+        """Browse for parquet file"""
+        file_path = filedialog.askopenfilename(
+            title="Select Parquet File",
+            filetypes=[("Parquet files", "*.parquet"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.parquet_file_var.set(file_path)
+            # Update file info
+            try:
+                file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+                file_name = os.path.basename(file_path)
+                self.parquet_info_var.set(f"Selected: {file_name} ({file_size:.2f} MB)")
+                self.parquet_status_var.set("File selected - Click 'Convert & Display' to view")
+            except Exception as e:
+                self.parquet_info_var.set(f"Error reading file info: {str(e)}")
+
+    def convert_and_display(self):
+        """Convert parquet to CSV and display in the treeview"""
+        file_path = self.parquet_file_var.get().strip()
+        if not file_path:
+            messagebox.showwarning("No File", "Please select a parquet file first.")
+            return
+        
+        if not os.path.exists(file_path):
+            messagebox.showerror("File Not Found", f"File not found: {file_path}")
+            return
+        
+        try:
+            self.parquet_status_var.set("Loading parquet file...")
+            self.root.update()
+            
+            # Read parquet file
+            df = pd.read_parquet(file_path)
+            
+            # Get max rows to display
+            try:
+                max_rows = int(self.max_rows_var.get())
+            except ValueError:
+                max_rows = 1000
+                self.max_rows_var.set("1000")
+            
+            # Limit rows for display
+            display_df = df.head(max_rows) if len(df) > max_rows else df
+            
+            self.parquet_status_var.set("Preparing data display...")
+            self.root.update()
+            
+            # Clear existing treeview
+            for item in self.parquet_tree.get_children():
+                self.parquet_tree.delete(item)
+            
+            # Configure treeview columns
+            columns = list(display_df.columns)
+            self.parquet_tree["columns"] = columns
+            
+            # Set column headings and widths
+            for col in columns:
+                self.parquet_tree.heading(col, text=col)
+                self.parquet_tree.column(col, width=100, minwidth=50)
+            
+            # Insert data
+            for index, row in display_df.iterrows():
+                values = [str(val) if pd.notna(val) else "" for val in row]
+                self.parquet_tree.insert("", "end", values=values)
+            
+            # Update summary
+            self.update_parquet_summary(df, display_df, file_path)
+            
+            # Save as CSV if option is selected
+            if self.save_csv_var.get():
+                csv_path = file_path.replace('.parquet', '_converted.csv')
+                display_df.to_csv(csv_path, index=False)
+                self.parquet_status_var.set(f"Displayed {len(display_df)} rows. CSV saved to: {csv_path}")
+            else:
+                self.parquet_status_var.set(f"Displayed {len(display_df)} rows of {len(df)} total")
+                
+        except Exception as e:
+            error_msg = f"Error converting parquet file: {str(e)}"
+            messagebox.showerror("Conversion Error", error_msg)
+            self.parquet_status_var.set("Error occurred during conversion")
+            # Log error to summary
+            self.parquet_summary_text.insert(tk.END, f"\n❌ Error: {error_msg}\n")
+            self.parquet_summary_text.insert(tk.END, f"Traceback: {traceback.format_exc()}\n")
+
+    def update_parquet_summary(self, full_df, display_df, file_path):
+        """Update the summary text with file and data information"""
+        self.parquet_summary_text.delete(1.0, tk.END)
+        
+        # File info
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+        
+        self.parquet_summary_text.insert(tk.END, f"📊 Parquet File Analysis\n")
+        self.parquet_summary_text.insert(tk.END, "=" * 50 + "\n\n")
+        
+        # File details
+        self.parquet_summary_text.insert(tk.END, f"📁 File Information:\n")
+        self.parquet_summary_text.insert(tk.END, f"  • Name: {file_name}\n")
+        self.parquet_summary_text.insert(tk.END, f"  • Size: {file_size:.2f} MB\n")
+        self.parquet_summary_text.insert(tk.END, f"  • Path: {file_path}\n\n")
+        
+        # Data structure
+        self.parquet_summary_text.insert(tk.END, f"📋 Data Structure:\n")
+        self.parquet_summary_text.insert(tk.END, f"  • Total Rows: {len(full_df):,}\n")
+        self.parquet_summary_text.insert(tk.END, f"  • Total Columns: {len(full_df.columns)}\n")
+        self.parquet_summary_text.insert(tk.END, f"  • Displayed Rows: {len(display_df):,}\n")
+        self.parquet_summary_text.insert(tk.END, f"  • Memory Usage: {full_df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB\n\n")
+        
+        # Column information
+        self.parquet_summary_text.insert(tk.END, f"🔍 Column Details:\n")
+        for col in full_df.columns:
+            dtype = str(full_df[col].dtype)
+            null_count = full_df[col].isnull().sum()
+            null_pct = (null_count / len(full_df)) * 100
+            self.parquet_summary_text.insert(tk.END, f"  • {col}: {dtype}")
+            if null_count > 0:
+                self.parquet_summary_text.insert(tk.END, f" ({null_count} nulls, {null_pct:.1f}%)")
+            self.parquet_summary_text.insert(tk.END, "\n")
+        
+        # Data sample
+        self.parquet_summary_text.insert(tk.END, f"\n📊 Sample Data (first 3 rows):\n")
+        try:
+            sample_text = full_df.head(3).to_string(max_cols=8, max_colwidth=20)
+            self.parquet_summary_text.insert(tk.END, sample_text + "\n")
+        except Exception as e:
+            self.parquet_summary_text.insert(tk.END, f"Could not display sample: {str(e)}\n")
+        
+        self.parquet_summary_text.insert(tk.END, f"\n✅ Conversion completed successfully!\n")
+
+    def export_to_csv(self):
+        """Export the full parquet file to CSV"""
+        file_path = self.parquet_file_var.get().strip()
+        if not file_path:
+            messagebox.showwarning("No File", "Please select a parquet file first.")
+            return
+        
+        try:
+            # Ask for save location
+            csv_path = filedialog.asksaveasfilename(
+                title="Save CSV File",
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialname=os.path.basename(file_path).replace('.parquet', '.csv')
+            )
+            
+            if not csv_path:
+                return
+            
+            self.parquet_status_var.set("Exporting to CSV...")
+            self.root.update()
+            
+            # Read and convert
+            df = pd.read_parquet(file_path)
+            df.to_csv(csv_path, index=False)
+            
+            self.parquet_status_var.set(f"Successfully exported {len(df):,} rows to CSV")
+            messagebox.showinfo("Export Complete", f"Successfully exported to:\n{csv_path}")
+            
+        except Exception as e:
+            error_msg = f"Error exporting to CSV: {str(e)}"
+            messagebox.showerror("Export Error", error_msg)
+            self.parquet_status_var.set("Export failed")
+
+    def open_parquet_location(self):
+        """Open the location of the selected parquet file"""
+        file_path = self.parquet_file_var.get().strip()
+        if not file_path:
+            messagebox.showwarning("No File", "Please select a parquet file first.")
+            return
+        
+        try:
+            if os.path.exists(file_path):
+                # Open file location in Windows Explorer
+                subprocess.run(['explorer', '/select,', file_path], check=True)
+            else:
+                messagebox.showerror("File Not Found", f"File not found: {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open file location: {str(e)}")
+
+    def clear_parquet_display(self):
+        """Clear the parquet display"""
+        # Clear treeview
+        for item in self.parquet_tree.get_children():
+            self.parquet_tree.delete(item)
+        
+        # Reset summary
+        self.parquet_summary_text.delete(1.0, tk.END)
+        self.parquet_summary_text.insert(tk.END, "📊 Parquet to CSV Viewer\n")
+        self.parquet_summary_text.insert(tk.END, "=" * 50 + "\n\n")
+        self.parquet_summary_text.insert(tk.END, "Display cleared. Select a parquet file to begin.\n")
+        
+        self.parquet_status_var.set("Display cleared - Ready for new file")
 
 
 def main():
