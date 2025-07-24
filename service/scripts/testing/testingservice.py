@@ -4005,13 +4005,9 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                         self.root.after(0, self.batch_log_text.insert, tk.END, f"         � {output.strip()}\n")
                         last_update = time.time()
                     
-                    # Check for timeout (10 minutes)
+                    # Timeout removed - allow unlimited processing time
                     current_time = time.time()
-                    if current_time - start_time > 600:
-                        process.terminate()
-                        process.wait()
-                        self.root.after(0, self.batch_log_text.insert, tk.END, f"         ⏰ Process terminated after 10 minutes timeout\n")
-                        return False
+                    # No timeout check - process can run indefinitely
                     
                     # Show progress indicator every 30 seconds if no output
                     if current_time - last_update > 30:

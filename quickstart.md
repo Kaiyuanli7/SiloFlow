@@ -2,7 +2,7 @@
 
 **SiloFlow** 是一个智能粮仓温度预测系统，提供自动化数据处理、机器学习管道和实时预测服务。
 
-## 📋 目录
+## 目录
 - [系统要求](#-系统要求)
 - [安装指南](#️-安装指南)
 - [初始配置](#️-初始配置)
@@ -16,7 +16,7 @@
 
 ---
 
-## 🔧 系统要求
+## 系统要求
 
 ### 最低要求
 - **Python**: 3.8+ (推荐: 3.11+)
@@ -31,7 +31,7 @@
 
 ---
 
-## 🛠️ 安装指南
+## 安装指南
 
 ### 步骤1: 克隆仓库
 ```bash
@@ -78,7 +78,7 @@ python -c "import granarypredict; print('✅ SiloFlow安装成功!')"
 
 ---
 
-## ⚙️ 初始配置
+## 初始配置
 
 ### 步骤1: 数据库配置
 创建或更新 `service/config/streaming_config.json`:
@@ -172,7 +172,7 @@ python service/scripts/testing/testingservice.py
 ### 步骤2: GUI概览
 界面提供6个主要标签页:
 
-#### 🌐 HTTP服务测试
+#### HTTP服务测试
 - **目的**: 测试API端点和上传文件
 - **快速开始**:
   1. 选择服务URL (本地/远程)
@@ -181,14 +181,14 @@ python service/scripts/testing/testingservice.py
   4. 选择要测试的端点
   5. 查看响应
 
-#### 🌍 远程客户端测试  
+#### 远程客户端测试  
 - **目的**: 测试远程服务部署
 - **快速开始**:
   1. 输入远程服务URL
   2. 运行全面的端点测试
   3. 查看详细测试报告
 
-#### 📊 简单检索
+#### 简单检索
 - **目的**: 从数据库提取数据
 - **快速开始**:
   1. 配置数据库连接
@@ -197,7 +197,7 @@ python service/scripts/testing/testingservice.py
   4. 执行检索
   5. 检查输出文件
 
-#### 🚀 生产管道
+#### 生产管道
 - **目的**: 运行完整的数据处理管道
 - **快速开始**:
   1. 加载生产配置
@@ -205,7 +205,7 @@ python service/scripts/testing/testingservice.py
   3. 监控系统资源
   4. 查看处理日志
 
-#### 🗄️ 数据库浏览器
+#### 数据库浏览器
 - **目的**: 探索数据库结构和数据
 - **快速开始**:
   1. 测试数据库连接
@@ -213,7 +213,7 @@ python service/scripts/testing/testingservice.py
   3. 探索数据分布
   4. 导出元数据
 
-#### 🔄 批量处理
+#### 批量处理
 - **目的**: 处理多个文件或操作
 - **快速开始**:
   1. 选择输入文件夹
@@ -223,7 +223,7 @@ python service/scripts/testing/testingservice.py
 
 ---
 
-## 📊 数据管道工作流
+## 数据管道工作流
 
 ### 工作流1: 初始数据设置
 ```bash
@@ -270,7 +270,7 @@ curl -X POST "http://localhost:8000/forecast" \
 
 ---
 
-## 🔗 API使用指南
+## API使用指南
 
 ### 健康检查
 ```bash
@@ -316,7 +316,7 @@ curl http://localhost:8000/status
 
 ---
 
-## 📱 仪表板访问
+## 仪表板访问
 
 ### 步骤1: 启动仪表板
 ```bash
@@ -341,7 +341,7 @@ streamlit run Dashboard.py --server.port 8501
 
 ---
 
-## 🔄 常用操作
+## 常用操作
 
 ### 日常操作检查清单
 
@@ -394,7 +394,7 @@ mv service.log logs/archive/service_$(date +%Y%m%d).log
 
 ---
 
-## 🐛 故障排除
+## 故障排除
 
 ### 常见问题
 
@@ -496,7 +496,7 @@ print(f'磁盘: {psutil.disk_usage(\"/\").percent}%')
 
 ---
 
-## 🎯 下一步
+## 下一步
 
 ### 高级配置
 - 查看 `handover.md` 获取详细模块文档
@@ -518,11 +518,9 @@ print(f'磁盘: {psutil.disk_usage(\"/\").percent}%')
 
 ---
 
-## 📞 支持
+## 支持
 
 - **文档**: 查看 `handover.md` 获取详细技术文档
 - **问题**: 通过GitHub issues报告错误
 - **性能**: 使用测试GUI进行性能分析
 - **配置**: 检查 `service/config/` 中的所有配置文件
-
-**祝您使用SiloFlow预测愉快! 🌾📈**
