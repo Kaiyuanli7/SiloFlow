@@ -39,7 +39,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Include modular routers
 # ---------------------------------------------------------------------------
-from .routes import router as all_routes  # noqa: E402
+from routes import router as all_routes  # noqa: E402
 
 app.include_router(all_routes)
 

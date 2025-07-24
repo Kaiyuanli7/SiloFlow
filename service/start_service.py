@@ -69,11 +69,16 @@ def main():
     
     # Import and start the service
     try:
-        # Change to the service directory and import as module
-        os.chdir(str(Path(__file__).parent))
-        sys.path.insert(0, str(Path(__file__).parent))
+        # Change to the service directory
+        service_dir = Path(__file__).parent
+        os.chdir(str(service_dir))
         
-        from main import app
+        # Add current directory to path for absolute imports
+        if str(service_dir) not in sys.path:
+            sys.path.insert(0, str(service_dir))
+        
+        # Import main module directly (not as relative import)
+        import main
         import uvicorn
         
         logger.info("Service initialized successfully")
@@ -82,7 +87,7 @@ def main():
         
         # Start the server
         uvicorn.run(
-            app,
+            main.app,
             host="0.0.0.0",
             port=8000,
             log_level="info",

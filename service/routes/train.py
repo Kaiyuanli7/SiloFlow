@@ -7,7 +7,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from ..core import processor
+from core import processor
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

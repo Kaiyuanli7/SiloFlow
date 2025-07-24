@@ -37,8 +37,8 @@ if not logger.handlers:
 class AutomatedGranaryProcessor:
     def __init__(self):
         # Use centralized data path manager
-        from .utils.data_paths import data_paths
-        from .utils.silo_filtering import get_existing_silo_files
+        from utils.data_paths import data_paths
+        from utils.silo_filtering import get_existing_silo_files
         self.data_paths = data_paths
         
         # Get standardized directory paths
@@ -80,7 +80,7 @@ class AutomatedGranaryProcessor:
     
     def _get_existing_silo_files(self, granary_name: str) -> set:
         """Get set of existing silo files for a granary using centralized utility"""
-        from .utils.silo_filtering import get_existing_silo_files
+        from utils.silo_filtering import get_existing_silo_files
         return get_existing_silo_files(granary_name)
         
     def _cleanup(self):
@@ -202,72 +202,28 @@ class AutomatedGranaryProcessor:
                     raise
     
     async def process_raw_csv(self, csv_path: str) -> Dict:
-        """Enhanced ingestion that returns both granary and silo change information, skipping existing silos"""
+        """Simplified ingestion for basic data processing"""
         try:
             from granarypredict import ingestion
             logger.info(f"Ingesting raw CSV: {csv_path}")
             
-            # Use safe file operation
+            # Simple ingestion without complex filtering
             def ingestion_operation():
-                return ingestion.ingest_and_sort(csv_path, return_new_data_status=True)
+                return ingestion.ingest_and_sort(csv_path)
             
-            change_info = self._safe_file_operation(ingestion_operation)
+            granary_status = self._safe_file_operation(ingestion_operation)
             
-            # Handle both old and new return formats for backward compatibility
-            if isinstance(change_info, dict) and 'granary_status' in change_info:
-                # New format with silo tracking
-                granary_status = change_info['granary_status']
-                silo_changes = change_info['silo_changes']
+            # Convert to simple format
+            if isinstance(granary_status, dict):
+                granaries_with_new_data = [name for name, is_new in granary_status.items() if is_new]
             else:
-                # Old format - fallback
-                granary_status = change_info if isinstance(change_info, dict) else {}
-                silo_changes = {}
+                granaries_with_new_data = []
             
-            # Filter out silos that already exist in simple_retrieval directory
-            filtered_silo_changes = {}
-            granaries_with_new_data = []
-            
-            for granary, is_new in granary_status.items():
-                if is_new:
-                    # Get existing silo files for this granary
-                    existing_silos = self._get_existing_silo_files(granary)
-                    
-                    # Get the silos that changed
-                    changed_silos = silo_changes.get(granary, [])
-                    
-                    # Filter out silos that already have files
-                    new_changed_silos = []
-                    skipped_silos = []
-                    
-                    for silo in changed_silos:
-                        # Check if this silo already has a file (exact match or partial match)
-                        silo_exists = False
-                        for existing_silo in existing_silos:
-                            if silo == existing_silo or existing_silo in silo or silo in existing_silo:
-                                silo_exists = True
-                                skipped_silos.append(silo)
-                                break
-                        
-                        if not silo_exists:
-                            new_changed_silos.append(silo)
-                    
-                    # Only include granary if there are new silos to process
-                    if new_changed_silos:
-                        granaries_with_new_data.append(granary)
-                        filtered_silo_changes[granary] = new_changed_silos
-                        logger.info(f"  {granary}: Processing {len(new_changed_silos)} new silos, skipping {len(skipped_silos)} existing silos")
-                        if skipped_silos:
-                            logger.info(f"    Skipped silos: {skipped_silos[:3]}{'...' if len(skipped_silos) > 3 else ''}")
-                        if new_changed_silos:
-                            logger.info(f"    New silos: {new_changed_silos[:3]}{'...' if len(new_changed_silos) > 3 else ''}")
-                    else:
-                        logger.info(f"  {granary}: All {len(changed_silos)} silos already processed, skipping granary")
-            
-            logger.info(f"Granaries with new data after filtering: {granaries_with_new_data}")
+            logger.info(f"Granaries processed: {granaries_with_new_data}")
             
             return {
                 'granaries': granaries_with_new_data,
-                'silo_changes': filtered_silo_changes
+                'silo_changes': {}  # Simplified - no silo tracking
             }
             
         except Exception as e:
@@ -277,7 +233,7 @@ class AutomatedGranaryProcessor:
             raise
     
     async def process_granary(self, granary_name: str, changed_silos: Optional[List[str]] = None) -> Dict:
-        """Process granary with optional silo filtering for preprocessing"""
+        """Simplified granary processing"""
         try:
             from granary_pipeline import run_complete_pipeline
             
@@ -295,20 +251,18 @@ class AutomatedGranaryProcessor:
             skip_train = model_path.exists()
             
             logger.info(f"Processing granary: {granary_name}")
-            if changed_silos:
-                logger.info(f"  Focus on changed silos: {changed_silos}")
             
             # Check memory before processing
             if not self._check_memory_usage():
                 self._force_memory_cleanup()
             
-            # Run pipeline with silo filtering for preprocessing
+            # Run simplified pipeline
             results = run_complete_pipeline(
                 granary_csv=str(granary_csv),
                 granary_name=granary_name,
                 skip_train=skip_train,
                 force_retrain=False,
-                changed_silos=changed_silos
+                changed_silos=None  # Simplified - no silo filtering
             )
             
             # Force cleanup after processing
@@ -326,132 +280,47 @@ class AutomatedGranaryProcessor:
                 'steps_completed': []
             }
     
-    async def generate_forecasts(self, granary_name: str, horizon: int = 7, changed_silos: Optional[List[str]] = None) -> Optional[Dict]:
-        """Generate forecasts for a granary with enhanced memory management"""
-        try:
-            logger.info(f"Generating forecasts for {granary_name} (horizon: {horizon})")
-            if changed_silos:
-                logger.info(f"  Forecasting only for changed silos: {changed_silos}")
-            
-            # Check memory before loading model
-            if not self._check_memory_usage():
-                self._force_memory_cleanup()
-            
-            # Load the trained model
-            model_filename = f"{granary_name}_forecast_model.joblib"
-            model_path = self.models_dir / model_filename
-            
-            if not model_path.exists():
-                logger.error(f"No trained model found for granary '{granary_name}'")
-                return None
-            
-            import joblib
-            from granarypredict.compression_utils import load_compressed_model
-            
-            # Try loading with new adaptive compression system
-            try:
-                model = load_compressed_model(model_path)
-                logger.info(f"Loaded model using adaptive compression from: {model_path}")
-            except Exception as e:
-                logger.warning(f"Adaptive loading failed, trying fallback: {e}")
-                # Fallback to regular joblib loading
-                model = joblib.load(model_path)
-                logger.info(f"Loaded model using fallback from: {model_path}")
-            
-            # Load processed data with memory management
-            processed_path = self.processed_dir / f"{granary_name}_processed"
-            
-            # Try Parquet first (preferred format)
-            parquet_file = processed_path.with_suffix('.parquet')
-            csv_file = processed_path.with_suffix('.csv')
-            
-            if parquet_file.exists():
-                logger.info(f"Loading processed data from Parquet: {parquet_file}")
-                from granarypredict.ingestion import read_granary_csv
-                df_processed = read_granary_csv(parquet_file)
-            elif csv_file.exists():
-                logger.info(f"Loading processed data from CSV: {csv_file}")
-                from granarypredict.ingestion import read_granary_csv
-                df_processed = read_granary_csv(csv_file)
-            else:
-                logger.error(f"No processed data found for granary '{granary_name}'")
-                logger.error(f"Checked for: {parquet_file} and {csv_file}")
-                return None
-            
-            logger.info(f"Loaded processed data with {len(df_processed)} rows")
-            
-            # Check memory after loading data
-            if not self._check_memory_usage():
-                self._force_memory_cleanup()
-                
-            # Generate forecasts (simplified for memory efficiency)
-            # This is a placeholder - implement actual forecast generation here
-            # For now, return a basic structure
-            return {
-                "granary_name": granary_name,
-                "forecast_horizon_days": horizon,
-                "total_records": len(df_processed),
-                "changed_silos": [int(silo) for silo in changed_silos] if changed_silos else None,
-                "status": "forecast_generation_placeholder"
-            }
-            
-        except Exception as e:
-            logger.error(f"Error generating forecasts for {granary_name}: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return None
+    # Removed generate_forecasts method - simplified pipeline doesn't need forecasting
     
     async def process_all_granaries(self, csv_path: str) -> Dict:
-        """Complete automated pipeline with enhanced error handling, memory management, and smart silo filtering"""
+        """Simplified pipeline processing"""
         try:
-            logger.info(f"Starting automated pipeline for: {csv_path}")
+            logger.info(f"Starting simplified pipeline for: {csv_path}")
             
-            # 1. Enhanced ingestion with silo tracking and existing file filtering
+            # 1. Simple ingestion
             change_info = await self.process_raw_csv(csv_path)
             new_granaries = change_info['granaries']
-            silo_changes = change_info['silo_changes']
             
             if not new_granaries:
-                logger.info("No new silos to process - all data already exists in simple_retrieval directory")
+                logger.info("No new granaries to process")
                 return {
                     'success': True,
-                    'message': 'All silos already processed - no new data to handle',
+                    'message': 'No new granaries found',
                     'granaries_processed': 0,
-                    'granaries_skipped': len(change_info.get('all_granaries', [])),
                     'forecasts': {}
                 }
             
-            # 2. Process each granary with filtered silo information
+            # 2. Process each granary
             results = {}
             successful_granaries = 0
             
             for granary in new_granaries:
                 logger.info(f"Processing granary: {granary}")
-                changed_silos = silo_changes.get(granary, [])
                 
                 # Check memory before processing each granary
                 if not self._check_memory_usage():
                     self._force_memory_cleanup()
                 
-                # Process granary (preprocess with silo focus, train on full granary)
-                process_result = await self.process_granary(granary, changed_silos)
+                # Process granary
+                process_result = await self.process_granary(granary)
                 
-                if process_result['success']:
-                    # Generate forecasts for changed silos only
-                    forecasts = await self.generate_forecasts(granary, changed_silos=changed_silos)
+                if process_result.get('success', False):
                     successful_granaries += 1
                     
-                    results[granary] = {
-                        "processing": process_result,
-                        "forecasts": forecasts,
-                        "changed_silos": [int(silo) for silo in changed_silos] if changed_silos else None
-                    }
-                else:
-                    results[granary] = {
-                        "processing": process_result,
-                        "forecasts": None,
-                        "changed_silos": [int(silo) for silo in changed_silos] if changed_silos else None
-                    }
+                results[granary] = {
+                    "processing": process_result,
+                    "forecasts": None  # Simplified - no forecasting
+                }
                 
                 # Force cleanup after each granary
                 gc.collect()
@@ -464,7 +333,7 @@ class AutomatedGranaryProcessor:
             }
             
         except Exception as e:
-            logger.error(f"Error in automated pipeline: {e}")
+            logger.error(f"Error in pipeline: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {

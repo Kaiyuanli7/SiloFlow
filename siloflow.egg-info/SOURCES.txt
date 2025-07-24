@@ -24,8 +24,6 @@ service/automated_processor.py
 service/core.py
 service/granary_pipeline.py
 service/main.py
-service/production_pipeline.py
-service/simple_test.py
 service/start_service.py
 service/test_filtering.py
 service/routes/__init__.py

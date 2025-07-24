@@ -32,15 +32,32 @@ import pandas as pd
 # Configure logging
 logger = logging.getLogger(__name__)
 
+def clean_log_message(message: str) -> str:
+    """Remove emojis and unicode characters that cause encoding issues on Windows."""
+    # Remove common emojis and replace with text equivalents
+    replacements = {
+        '🚀': '[GPU]',
+        '⚡': '[Polars]', 
+        '🐼': '[Pandas]',
+        '✅': '[OK]',
+        '⚠️': '[WARNING]',
+        '🔍': '[INFO]',
+        '🔄': '[PROCESSING]'
+    }
+    clean_msg = message
+    for emoji, replacement in replacements.items():
+        clean_msg = clean_msg.replace(emoji, replacement)
+    return clean_msg
+
 # GPU Detection and Import Management
 try:
     import cudf
     import cupy as cp
     HAS_CUDF = True
-    logger.info("✅ RAPIDS cuDF available - GPU-accelerated data processing enabled")
+    logger.info("RAPIDS cuDF available - GPU-accelerated data processing enabled")
 except ImportError:
     HAS_CUDF = False
-    logger.info("⚠️  RAPIDS cuDF not available - falling back to pandas/Polars")
+    logger.info("RAPIDS cuDF not available - falling back to pandas/Polars")
 
 # Fallback imports
 try:
@@ -107,7 +124,7 @@ def gpu_comprehensive_sort_optimized(
     # GPU-accelerated sorting with cuDF
     if backend == 'cudf' and HAS_CUDF:
         try:
-            logger.info(f"🚀 Using GPU (cuDF) for sorting {len(df):,} rows by {sort_columns}")
+            logger.info(clean_log_message(f"🚀 Using GPU (cuDF) for sorting {len(df):,} rows by {sort_columns}"))
             
             # Convert pandas DataFrame to cuDF
             gpu_df = cudf.from_pandas(df)
@@ -122,7 +139,7 @@ def gpu_comprehensive_sort_optimized(
             # Convert back to pandas for compatibility
             result = sorted_gpu_df.to_pandas()
             
-            logger.info(f"✅ GPU sorting completed for {len(result):,} rows")
+            logger.info(clean_log_message(f"✅ GPU sorting completed for {len(result):,} rows"))
             return result
             
         except Exception as e:
@@ -132,7 +149,7 @@ def gpu_comprehensive_sort_optimized(
     # Fallback to Polars if available
     if backend == 'polars' and HAS_POLARS:
         try:
-            logger.info(f"⚡ Using Polars for sorting {len(df):,} rows by {sort_columns}")
+            logger.info(clean_log_message(f"⚡ Using Polars for sorting {len(df):,} rows by {sort_columns}"))
             
             # Convert to Polars LazyFrame for optimization
             pl_df = pl.from_pandas(df).lazy()
@@ -143,16 +160,16 @@ def gpu_comprehensive_sort_optimized(
             # Collect and convert back to pandas
             result = sorted_pl_df.collect().to_pandas()
             
-            logger.info(f"✅ Polars sorting completed for {len(result):,} rows")
+            logger.info(clean_log_message(f"✅ Polars sorting completed for {len(result):,} rows"))
             return result
             
         except Exception as e:
             logger.warning(f"⚠️  Polars sorting failed, falling back to pandas: {e}")
     
     # Final fallback to pandas
-    logger.info(f"🐼 Using pandas for sorting {len(df):,} rows by {sort_columns}")
-    result = df.sort_values(by=sort_columns, ascending=ascending, ignore_index=True)
-    logger.info(f"✅ Pandas sorting completed for {len(result):,} rows")
+    logger.info(clean_log_message(f"🐼 Using pandas for sorting {len(df):,} rows by {sort_columns}"))
+    result = df.sort_values(sort_columns).reset_index(drop=True)
+    logger.info(clean_log_message(f"✅ Pandas sorting completed for {len(result):,} rows"))
     return result
 
 def gpu_assign_group_id_optimized(
@@ -189,7 +206,7 @@ def gpu_assign_group_id_optimized(
     # GPU-accelerated grouping with cuDF
     if backend == 'cudf' and HAS_CUDF:
         try:
-            logger.info(f"🚀 Using GPU (cuDF) for group assignment on {len(df):,} rows by {group_columns}")
+            logger.info(clean_log_message(f"🚀 Using GPU (cuDF) for group assignment on {len(df):,} rows by {group_columns}"))
             
             # Convert to cuDF
             gpu_df = cudf.from_pandas(df)
@@ -204,7 +221,7 @@ def gpu_assign_group_id_optimized(
             # Convert back to pandas
             result = result_gpu.to_pandas()
             
-            logger.info(f"✅ GPU group assignment completed: {len(group_combinations):,} unique groups")
+            logger.info(clean_log_message(f"✅ GPU group assignment completed: {len(group_combinations):,} unique groups"))
             return result
             
         except Exception as e:
@@ -214,7 +231,7 @@ def gpu_assign_group_id_optimized(
     # Fallback to Polars if available
     if backend == 'polars' and HAS_POLARS:
         try:
-            logger.info(f"⚡ Using Polars for group assignment on {len(df):,} rows by {group_columns}")
+            logger.info(clean_log_message(f"⚡ Using Polars for group assignment on {len(df):,} rows by {group_columns}"))
             
             # Convert to Polars
             pl_df = pl.from_pandas(df)
@@ -231,14 +248,14 @@ def gpu_assign_group_id_optimized(
             result_pl = pl_df.join(group_mapping, on=group_columns, how='left')
             result = result_pl.to_pandas()
             
-            logger.info(f"✅ Polars group assignment completed: {len(group_mapping):,} unique groups")
+            logger.info(clean_log_message(f"✅ Polars group assignment completed: {len(group_mapping):,} unique groups"))
             return result
             
         except Exception as e:
-            logger.warning(f"⚠️  Polars group assignment failed, falling back to pandas: {e}")
+            logger.warning(clean_log_message(f"⚠️  Polars group assignment failed, falling back to pandas: {e}"))
     
     # Final fallback to pandas
-    logger.info(f"🐼 Using pandas for group assignment on {len(df):,} rows by {group_columns}")
+    logger.info(clean_log_message(f"🐼 Using pandas for group assignment on {len(df):,} rows by {group_columns}"))
     
     # Create unique combinations and assign IDs
     unique_groups = df[group_columns].drop_duplicates().reset_index(drop=True)
@@ -247,7 +264,7 @@ def gpu_assign_group_id_optimized(
     # Merge back to original dataframe
     result = df.merge(unique_groups, on=group_columns, how='left')
     
-    logger.info(f"✅ Pandas group assignment completed: {len(unique_groups):,} unique groups")
+    logger.info(clean_log_message(f"✅ Pandas group assignment completed: {len(unique_groups):,} unique groups"))
     return result
 
 def gpu_aggregation_optimized(

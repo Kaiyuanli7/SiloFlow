@@ -71,7 +71,6 @@ cmd: .venv\Scripts\activate.bat
 cmd: pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 cmd: python -m pip install --upgrade pip
 cmd: pip install -r requirements.txt
-cmd: pip install -e .               # editable install for granarypredict/
 
 # 5. Launch dashboard
 cmd: streamlit run app/Dashboard.py

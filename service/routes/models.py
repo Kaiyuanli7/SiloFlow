@@ -6,7 +6,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from ..core import processor
+from core import processor
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -18,7 +18,7 @@ router = APIRouter()
 async def list_models(page: int = 1, per_page: int = 10):
     """List all available models with pagination"""
     try:
-        from ..utils.data_paths import data_paths
+        from utils.data_paths import data_paths
         models_dir = data_paths.get_models_dir()
         model_files = list(models_dir.glob("*_forecast_model.joblib*"))
         

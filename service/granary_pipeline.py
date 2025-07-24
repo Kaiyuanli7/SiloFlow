@@ -554,6 +554,23 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def clean_log_message(message: str) -> str:
+    """Remove emojis and unicode characters that cause encoding issues on Windows."""
+    # Remove common emojis and replace with text equivalents
+    replacements = {
+        '🚀': '[GPU]',
+        '⚡': '[Polars]', 
+        '🐼': '[Pandas]',
+        '✅': '[OK]',
+        '⚠️': '[WARNING]',
+        '🔍': '[INFO]',
+        '🔄': '[PROCESSING]'
+    }
+    clean_msg = message
+    for emoji, replacement in replacements.items():
+        clean_msg = clean_msg.replace(emoji, replacement)
+    return clean_msg
+
 def get_gpu_config_for_training(dataset_size=None, feature_count=None, force_gpu_id=None):
     """
     Get GPU configuration for model training with proper multi-GPU handling.
@@ -636,9 +653,6 @@ def run_complete_pipeline(
     changed_silos: Optional[List[str]] = None,  # NEW: Track which silos changed
     max_workers: int = 4  # New parameter for parallel processing
 ) -> dict:
-    # Initialize data paths if not provided
-    if data_paths is None:
-        from .utils.data_paths import data_paths
     """
     Run complete pipeline: preprocess and train for a specific granary CSV.
     
@@ -649,6 +663,8 @@ def run_complete_pipeline(
         will focus on these silos for efficiency, but training will use
         the full granary data.
     """
+    # Import data paths utility
+    from utils.data_paths import data_paths
     # Skip ingestion step since we're working with individual granary CSV
     # Go directly to preprocessing
     # Then training
@@ -665,7 +681,7 @@ def run_complete_pipeline(
     try:
         # Step 1: Load full granary data with optimized loading
         logger.info(f"Loading data for granary: {granary_name}")
-        df_full = load_data_optimized(granary_csv)
+        df_full = load_data_optimized(str(granary_csv))  # Convert Path to string
         
         # Step 2: Efficient preprocessing strategy
         if changed_silos and len(changed_silos) < len(df_full['heap_id'].unique()):
@@ -673,18 +689,18 @@ def run_complete_pipeline(
             logger.info(f"Efficient preprocessing: focusing on {len(changed_silos)} changed silos")
         
             # Load existing processed data if available (supports both CSV and Parquet)
-            from .utils.data_paths import data_paths
+            from utils.data_paths import data_paths
             processed_dir = data_paths.get_processed_dir()
             processed_path_csv = processed_dir / f"{granary_name}_processed.csv"
             processed_path_parquet = processed_dir / f"{granary_name}_processed.parquet"
             
             if processed_path_parquet.exists():
                 # Use Parquet file if available with optimized loading
-                df_existing = load_data_optimized(processed_path_parquet)
+                df_existing = load_data_optimized(str(processed_path_parquet))  # Convert Path to string
                 logger.info(f"Loaded existing Parquet data: {processed_path_parquet}")
             elif processed_path_csv.exists():
                 # Fallback to CSV file if Parquet doesn't exist with optimized loading
-                df_existing = load_data_optimized(processed_path_csv)
+                df_existing = load_data_optimized(str(processed_path_csv))  # Convert Path to string
                 logger.info(f"Loaded existing CSV data: {processed_path_csv}")
             else:
                 df_existing = None
@@ -710,6 +726,7 @@ def run_complete_pipeline(
         
         # Save processed data as Parquet (much more efficient for large datasets)
         from granarypredict.ingestion import save_granary_data
+        from utils.data_paths import data_paths
         
         processed_output = data_paths.get_processed_dir() / f"{granary_name}_processed"
         processed_output.parent.mkdir(exist_ok=True, parents=True)
@@ -728,6 +745,7 @@ def run_complete_pipeline(
         
         # Step 3: Train model on FULL granary data (not just changed silos)
         # This ensures the model learns from all silos in the granary
+        from utils.data_paths import data_paths
         model_filename = f"{granary_name}_forecast_model.joblib"
         model_path = data_paths.get_models_dir() / model_filename
         
@@ -1304,7 +1322,7 @@ def main():
         processed_file = None
         # Use centralized data paths if available
         try:
-            from .utils.data_paths import data_paths
+            from utils.data_paths import data_paths
             processed_dir = data_paths.get_processed_dir()
         except ImportError:
             processed_dir = pathlib.Path("data/processed")
