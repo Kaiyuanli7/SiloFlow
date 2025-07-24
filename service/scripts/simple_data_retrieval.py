@@ -22,12 +22,12 @@ import pandas as pd
 from sqlalchemy import create_engine
 import urllib.parse
 
-# Set up logging
+# Set up logging with UTF-8 encoding
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('simple_data_retrieval.log'),
+        logging.FileHandler('simple_data_retrieval.log', encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -42,13 +42,15 @@ class SimpleDataRetriever:
         self.engine = self._create_engine()
         
     def _create_engine(self):
-        """Create SQLAlchemy engine."""
+        """Create SQLAlchemy engine with proper encoding."""
         password_encoded = urllib.parse.quote_plus(self.db_config['password'])
         connection_string = (
             f"mysql+pymysql://{self.db_config['user']}:{password_encoded}"
             f"@{self.db_config['host']}:{self.db_config['port']}/{self.db_config['database']}"
+            f"?charset=utf8mb4"
         )
-        return create_engine(connection_string, pool_pre_ping=True)
+        return create_engine(connection_string, pool_pre_ping=True, 
+                           connect_args={"charset": "utf8mb4"})
     
     def get_all_granaries_and_silos(self) -> pd.DataFrame:
         """Get all granaries and silos with their sub_table_id."""
@@ -65,9 +67,12 @@ class SimpleDataRetriever:
             ORDER BY loc.sub_table_id, store.store_name
         """
         try:
+            # Explicitly handle encoding for database queries
             return pd.read_sql(query, self.engine)
         except Exception as e:
-            logger.error(f"Failed to retrieve granaries and silos: {e}")
+            # Log error with safe encoding
+            error_msg = str(e).encode('utf-8', errors='ignore').decode('utf-8')
+            logger.error(f"Failed to retrieve granaries and silos: {error_msg}")
             raise
             
     def get_granaries_with_details(self) -> pd.DataFrame:
@@ -89,9 +94,12 @@ class SimpleDataRetriever:
             ORDER BY loc.sub_table_id, store.store_name
         """
         try:
+            # Explicitly handle encoding for database queries  
             return pd.read_sql(query, self.engine)
         except Exception as e:
-            logger.error(f"Failed to retrieve granaries with details: {e}")
+            # Log error with safe encoding
+            error_msg = str(e).encode('utf-8', errors='ignore').decode('utf-8')
+            logger.error(f"Failed to retrieve granaries with details: {error_msg}")
             raise
     
     def get_silo_date_range(self, silo_id: str, sub_table_id: int) -> Tuple[Optional[datetime], Optional[datetime]]:
@@ -123,7 +131,9 @@ class SimpleDataRetriever:
                 return min_date, max_date
             return None, None
         except Exception as e:
-            logger.error(f"Failed to get date range for silo {silo_id}: {e}")
+            # Log error with safe encoding
+            error_msg = str(e).encode('utf-8', errors='ignore').decode('utf-8')
+            logger.error(f"Failed to get date range for silo {silo_id}: {error_msg}")
             return None, None
     
     def get_silo_data(self, granary_id: str, silo_id: str, sub_table_id: int, 
@@ -179,7 +189,9 @@ class SimpleDataRetriever:
             logger.info(f"Query completed. Retrieved {len(result)} records.")
             return result
         except Exception as e:
-            logger.error(f"Failed to retrieve silo data: {e}")
+            # Log error with safe encoding
+            error_msg = str(e).encode('utf-8', errors='ignore').decode('utf-8')
+            logger.error(f"Failed to retrieve silo data: {error_msg}")
             raise
     
     def retrieve_and_save(self, granary_name: str, silo_id: str, 
@@ -202,7 +214,8 @@ class SimpleDataRetriever:
         
         sub_table_id = silo_info['sub_table_id'].iloc[0]
         granary_id = silo_info['storepoint_id'].iloc[0]
-        silo_name = silo_info['store_name'].iloc[0]
+        # Handle potential encoding issues in silo name
+        silo_name = str(silo_info['store_name'].iloc[0]).encode('utf-8', errors='ignore').decode('utf-8')
         
         logger.info(f"✅ Found silo: {silo_name}")
         logger.info(f"   Granary ID: {granary_id}")
@@ -237,7 +250,10 @@ class SimpleDataRetriever:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        filename = f"{granary_name}_{silo_name}_{start_date}_to_{end_date}.parquet"
+        # Clean filename of Chinese characters and invalid characters to prevent encoding issues
+        safe_granary_name = granary_name.encode('ascii', errors='ignore').decode('ascii') or 'granary'
+        safe_silo_name = silo_name.encode('ascii', errors='ignore').decode('ascii') or 'silo'
+        filename = f"{safe_granary_name}_{safe_silo_name}_{start_date}_to_{end_date}.parquet"
         # Clean filename of invalid characters
         filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
         file_path = output_path / filename
@@ -420,7 +436,9 @@ def main():
             sys.exit(1)
             
     except Exception as e:
-        logger.error(f"Error: {e}")
+        # Log error with safe encoding
+        error_msg = str(e).encode('utf-8', errors='ignore').decode('utf-8')
+        logger.error(f"Error: {error_msg}")
         sys.exit(1)
 
 if __name__ == "__main__":

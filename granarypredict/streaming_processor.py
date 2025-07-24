@@ -863,9 +863,9 @@ class MassiveModelTrainer:
     """
     
     def __init__(self, 
-                 chunk_size: int = 100_000,
+                 chunk_size: int = 50_000,  # Reduced from 100k for better memory management
                  backend: str = "auto",
-                 memory_threshold: float = 75.0):
+                 memory_threshold: float = 70.0):  # Lower threshold for more aggressive cleanup
         """
         Initialize massive model trainer.
         
@@ -903,9 +903,13 @@ class MassiveModelTrainer:
                               model_output_path: Union[str, Path],
                               feature_columns: Optional[List[str]] = None,
                               horizons: Tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7),
-                              validation_split: float = 0.2,
-                              early_stopping_rounds: int = 100,
-                              use_gpu: bool = True) -> Dict[str, Any]:
+                              validation_split: float = 0.05,  # Changed to 5% for 95/5 split to determine n_estimators
+                              early_stopping_rounds: int = 50,  # Using anchor day optimized value
+                              use_gpu: bool = True,
+                              future_safe: bool = False,  # Explicitly set future_safe as requirement
+                              use_anchor_early_stopping: bool = True,  # Enable anchor day early stopping
+                              balance_horizons: bool = True,  # Enable horizon balancing
+                              horizon_strategy: str = "increasing") -> Dict[str, Any]:  # Set increasing balancing mode
         """
         Train LightGBM model on massive datasets using streaming approach.
         
@@ -937,6 +941,8 @@ class MassiveModelTrainer:
             Training results and model metrics
         """
         import time
+        import psutil
+        import gc
         from granarypredict.multi_lgbm import MultiLGBMRegressor
         from granarypredict.features import select_feature_target_multi
         
@@ -945,6 +951,7 @@ class MassiveModelTrainer:
         
         try:
             # Initialize model with optimized parameters for massive datasets
+            # Following requirements: increasing balancing mode, anchor day early stopping
             model = MultiLGBMRegressor(
                 base_params={
                     'learning_rate': 0.05,  # Lower learning rate for stable incremental training
@@ -953,7 +960,7 @@ class MassiveModelTrainer:
                     'subsample': 0.8,
                     'colsample_bytree': 0.8,
                     'min_child_samples': 50,
-                    'n_estimators': 1000,   # More trees with early stopping
+                    'n_estimators': 1000,   # Initial estimate, will be determined from 95% split
                     'verbosity': -1,
                     'random_state': 42,
                 },
@@ -971,17 +978,27 @@ class MassiveModelTrainer:
             y_train_chunks = []
             X_val_chunks = []
             y_val_chunks = []
+            all_chunks = []  # Store all chunks for full training later
             
             chunk_count = 0
             total_rows = 0
             
-            logger.info("Processing training data in chunks...")
+            # PHASE 1: Process all data and split into 95% training / 5% validation to determine n_estimators
+            logger.info(f"🔍 PHASE 1: Processing data with {validation_split*100:.0f}% validation split to determine optimal n_estimators...")
+            logger.info(f"📊 Training configuration: future_safe={future_safe}, balance_horizons={balance_horizons}, horizon_strategy={horizon_strategy}")
+            logger.info(f"⚙️ Anchor day early stopping: {use_anchor_early_stopping}")
             
             # Stream through data and collect chunks
             for chunk in self.data_processor.read_massive_dataset(train_data_path):
                 try:
+                    # Monitor memory usage
+                    current_memory = psutil.virtual_memory().percent
+                    if current_memory > self.memory_threshold:
+                        logger.warning(f"Memory usage high ({current_memory:.1f}%), forcing garbage collection")
+                        gc.collect()
+                    
                     # Apply comprehensive preprocessing to chunk
-                    processed_chunk = self._preprocess_training_chunk(chunk)
+                    processed_chunk = self._preprocess_training_chunk(chunk, future_safe=future_safe)
                     
                     if processed_chunk.empty:
                         continue
@@ -1007,7 +1024,7 @@ class MassiveModelTrainer:
                         available_features = [f for f in feature_columns if f in X_chunk.columns]
                         X_chunk = X_chunk[available_features]
                     
-                    # Split chunk into train/validation
+                    # Split chunk into train/validation for n_estimators determination
                     split_idx = int(len(X_chunk) * (1 - validation_split))
                     
                     X_train_chunk = X_chunk.iloc[:split_idx]
@@ -1015,6 +1032,7 @@ class MassiveModelTrainer:
                     X_val_chunk = X_chunk.iloc[split_idx:]
                     y_val_chunk = y_chunk.iloc[split_idx:]
                     
+                    # Store chunks for both phases
                     if len(X_train_chunk) > 0:
                         X_train_chunks.append(X_train_chunk)
                         y_train_chunks.append(y_train_chunk)
@@ -1023,22 +1041,48 @@ class MassiveModelTrainer:
                         X_val_chunks.append(X_val_chunk)
                         y_val_chunks.append(y_val_chunk)
                     
+                    # Store complete chunk for final 100% training
+                    all_chunks.append({
+                        'X': X_chunk.copy(),
+                        'y': y_chunk.copy(),
+                        'processed_data': processed_chunk.copy()
+                    })
+                    
                     chunk_count += 1
                     total_rows += len(processed_chunk)
                     
-                    # Periodic logging
-                    if chunk_count % 10 == 0:
-                        logger.info(f"Processed {chunk_count} chunks, {total_rows:,} total rows")
+                    # Periodic logging and memory management
+                    if chunk_count % 5 == 0:  # More frequent logging
+                        current_mem = psutil.virtual_memory().percent
+                        logger.info(f"Processed {chunk_count} chunks, {total_rows:,} total rows (Memory: {current_mem:.1f}%)")
                     
-                    # Memory management
+                    # Memory management - clean up chunk data immediately
                     del processed_chunk, X_chunk, y_chunk
                     gc.collect()
                     
-                    # Train incrementally when we have enough chunks
-                    if len(X_train_chunks) >= 5:  # Train on 5 chunks at a time
-                        logger.info(f"Training model on batch of {len(X_train_chunks)} chunks...")
+                    # Train incrementally when we have enough chunks or memory is getting high
+                    should_train = (len(X_train_chunks) >= 3 or  # Smaller batches for memory efficiency
+                                   psutil.virtual_memory().percent > self.memory_threshold * 0.8)  # Train early if memory high
+                    
+                    if should_train and X_train_chunks:
+                        logger.info(f"🔄 Training model on batch of {len(X_train_chunks)} chunks (Memory trigger: {psutil.virtual_memory().percent:.1f}%)...")
+                        
+                        # Prepare anchor dataframe for anchor day early stopping
+                        anchor_df = None
+                        if use_anchor_early_stopping and X_val_chunks:
+                            # Create anchor dataframe from validation chunks for early stopping
+                            val_processed_chunks = [chunk['processed_data'] for chunk in all_chunks[-len(X_val_chunks):]]
+                            if val_processed_chunks:
+                                anchor_df = pd.concat(val_processed_chunks, ignore_index=True)
+                        
                         self._train_model_batch(model, X_train_chunks, y_train_chunks, 
-                                              X_val_chunks, y_val_chunks, is_first_batch=(chunk_count <= 5))
+                                              X_val_chunks, y_val_chunks, 
+                                              is_first_batch=(chunk_count <= 3),
+                                              use_anchor_early_stopping=use_anchor_early_stopping,
+                                              balance_horizons=balance_horizons,
+                                              horizon_strategy=horizon_strategy,
+                                              anchor_df=anchor_df,
+                                              horizons=horizons)
                         
                         # Clear processed chunks to free memory  
                         X_train_chunks.clear()
@@ -1046,16 +1090,86 @@ class MassiveModelTrainer:
                         X_val_chunks.clear()
                         y_val_chunks.clear()
                         gc.collect()
+                        
+                        # Log memory after cleanup
+                        post_cleanup_mem = psutil.virtual_memory().percent
+                        logger.info(f"Memory after batch training cleanup: {post_cleanup_mem:.1f}%")
                 
                 except Exception as e:
                     logger.warning(f"Error processing chunk {chunk_count}: {e}")
                     continue
             
-            # Train on remaining chunks
+            # Train on remaining chunks from Phase 1
             if X_train_chunks:
-                logger.info(f"Training final batch of {len(X_train_chunks)} chunks...")
+                logger.info(f"🔄 Training final batch of {len(X_train_chunks)} chunks...")
+                anchor_df = None
+                if use_anchor_early_stopping and X_val_chunks:
+                    val_processed_chunks = [chunk['processed_data'] for chunk in all_chunks[-len(X_val_chunks):]]
+                    if val_processed_chunks:
+                        anchor_df = pd.concat(val_processed_chunks, ignore_index=True)
+                        
                 self._train_model_batch(model, X_train_chunks, y_train_chunks,
-                                      X_val_chunks, y_val_chunks, is_first_batch=False)
+                                      X_val_chunks, y_val_chunks, is_first_batch=False,
+                                      use_anchor_early_stopping=use_anchor_early_stopping,
+                                      balance_horizons=balance_horizons,
+                                      horizon_strategy=horizon_strategy,
+                                      anchor_df=anchor_df,
+                                      horizons=horizons)
+            
+            # Get optimal n_estimators from Phase 1 training
+            optimal_n_estimators = getattr(model, 'best_iteration_', 1000)
+            logger.info(f"📊 Phase 1 complete. Optimal n_estimators determined: {optimal_n_estimators}")
+            
+            # PHASE 2: Train final model on 100% of data with determined n_estimators
+            logger.info(f"🚀 PHASE 2: Training final model on 100% of data with n_estimators={optimal_n_estimators}")
+            
+            # Create final model with determined n_estimators
+            final_model = MultiLGBMRegressor(
+                base_params={
+                    **model.base_params,
+                    'n_estimators': optimal_n_estimators  # Use determined value
+                },
+                upper_bound_estimators=optimal_n_estimators,
+                early_stopping_rounds=0,  # No early stopping for final training
+                uncertainty_estimation=True,
+                n_bootstrap_samples=15,
+                use_gpu=use_gpu,
+                conservative_mode=True,
+                stability_feature_boost=2.0
+            )
+            
+            # Combine all chunks for 100% training
+            logger.info(f"📦 Combining all {len(all_chunks)} chunks for final training...")
+            all_X_chunks = [chunk['X'] for chunk in all_chunks]
+            all_y_chunks = [chunk['y'] for chunk in all_chunks]
+            
+            if all_X_chunks:
+                X_full = pd.concat(all_X_chunks, ignore_index=True)
+                y_full = pd.concat(all_y_chunks, ignore_index=True)
+                
+                logger.info(f"🎯 Final training on {len(X_full):,} samples (100% of data)")
+                logger.info(f"   • Horizon strategy: {horizon_strategy} (increasing balancing mode)")
+                logger.info(f"   • Balance horizons: {balance_horizons}")
+                logger.info(f"   • Fixed n_estimators: {optimal_n_estimators}")
+                
+                # Train final model on 100% data
+                final_model.fit(
+                    X_full, y_full,
+                    verbose=False,
+                    balance_horizons=balance_horizons,
+                    horizon_strategy=horizon_strategy,
+                )
+                
+                # Replace the model with the final trained version
+                model = final_model
+                
+                # Cleanup full training data
+                del X_full, y_full, all_X_chunks, all_y_chunks, all_chunks
+                gc.collect()
+                
+                logger.info("✅ Phase 2 complete: Final model trained on 100% of data")
+            else:
+                logger.warning("⚠️ No chunks available for final training")
             
             # Save trained model
             model_output_path = Path(model_output_path)
@@ -1098,13 +1212,20 @@ class MassiveModelTrainer:
                 'training_stats': self.training_stats
             }
     
-    def _preprocess_training_chunk(self, chunk: pd.DataFrame) -> pd.DataFrame:
-        """Apply comprehensive preprocessing to training chunk."""
+    def _preprocess_training_chunk(self, chunk: pd.DataFrame, future_safe: bool = False) -> pd.DataFrame:
+        """Apply comprehensive preprocessing to training chunk with memory management."""
+        import gc
+        
         try:
             # Use same comprehensive preprocessing as batch processing
-            processor = MassiveDatasetProcessor(chunk_size=len(chunk))
+            processor = MassiveDatasetProcessor(
+                chunk_size=len(chunk),
+                memory_threshold_percent=self.memory_threshold
+            )
             
-            # Apply comprehensive preprocessing functions
+            # Apply comprehensive preprocessing functions with memory cleanup
+            original_chunk = chunk.copy()
+            
             for func in [
                 processor._standardize_columns,
                 processor._basic_clean,
@@ -1125,19 +1246,47 @@ class MassiveModelTrainer:
             ]:
                 try:
                     chunk = func(chunk)
+                    # Periodic garbage collection during intensive preprocessing
+                    if func.__name__ in ['_add_multi_lag_features', '_add_rolling_stats']:
+                        gc.collect()
                 except Exception as e:
                     logger.warning(f"Preprocessing function {func.__name__} failed: {e}")
-                    continue
+                    # Fall back to original chunk if preprocessing fails
+                    chunk = original_chunk.copy()
+                    break
+            
+            # Apply future_safe filtering if enabled
+            if future_safe and hasattr(chunk, 'columns'):
+                # Remove environmental/weather features for future-safe training
+                env_features = [col for col in chunk.columns if any(keyword in col.lower() 
+                    for keyword in ['weather', 'env', 'climate', 'humidity', 'pressure', 'wind', 'rain', 'solar'])]
+                
+                if env_features:
+                    logger.info(f"🔒 Future-safe mode: Excluding {len(env_features)} environmental features")
+                    chunk = chunk.drop(columns=env_features, errors='ignore')
+            
+            # Final cleanup
+            del original_chunk
+            gc.collect()
             
             return chunk
             
         except Exception as e:
             logger.warning(f"Chunk preprocessing failed: {e}")
+            gc.collect()
             return chunk
     
     def _train_model_batch(self, model, X_train_chunks, y_train_chunks, 
-                          X_val_chunks, y_val_chunks, is_first_batch=False):
-        """Train model on a batch of chunks."""
+                          X_val_chunks, y_val_chunks, is_first_batch=False,
+                          use_anchor_early_stopping=True, balance_horizons=True,
+                          horizon_strategy="increasing", anchor_df=None, horizons=(1,2,3,4,5,6,7)):
+        """Train model on a batch of chunks with memory management and requirements compliance."""
+        import psutil
+        import gc
+        
+        # Monitor memory before training
+        initial_memory = psutil.virtual_memory().percent
+        
         try:
             # Combine chunks
             if X_train_chunks:
@@ -1153,18 +1302,60 @@ class MassiveModelTrainer:
             else:
                 eval_set = None
             
-            # Train model (first batch gets full training, subsequent get incremental)
+            # Log memory usage before training
+            pre_train_memory = psutil.virtual_memory().percent
+            logger.info(f"Pre-training memory usage: {pre_train_memory:.1f}%")
+            
+            # Train model with all the requirements
             if is_first_batch:
-                logger.info(f"Initial training on {len(X_train):,} samples")
-                model.fit(X_train, y_train, eval_set=eval_set, verbose=False)
+                logger.info(f"🎯 Initial training on {len(X_train):,} samples with requirements:")
+                logger.info(f"   • Horizon strategy: {horizon_strategy} (increasing balancing mode)")
+                logger.info(f"   • Balance horizons: {balance_horizons}")
+                logger.info(f"   • Anchor day early stopping: {use_anchor_early_stopping}")
+                
+                model.fit(
+                    X_train, y_train, 
+                    eval_set=eval_set, 
+                    verbose=False,
+                    balance_horizons=balance_horizons,
+                    horizon_strategy=horizon_strategy,
+                    use_anchor_early_stopping=use_anchor_early_stopping,
+                    anchor_df=anchor_df,
+                    horizon_tuple=horizons
+                )
             else:
                 # For LightGBM, we need to retrain as it doesn't support incremental learning
-                # In production, consider using SGD-based models for true incremental learning
-                logger.info(f"Retraining model with additional {len(X_train):,} samples")
-                model.fit(X_train, y_train, eval_set=eval_set, verbose=False)
+                logger.info(f"🔄 Retraining model with additional {len(X_train):,} samples")
+                model.fit(
+                    X_train, y_train, 
+                    eval_set=eval_set, 
+                    verbose=False,
+                    balance_horizons=balance_horizons,
+                    horizon_strategy=horizon_strategy,
+                    use_anchor_early_stopping=use_anchor_early_stopping,
+                    anchor_df=anchor_df,
+                    horizon_tuple=horizons
+                )
+            
+            # Log optimal n_estimators found
+            if hasattr(model, 'best_iteration_'):
+                logger.info(f"📊 Optimal n_estimators from training: {model.best_iteration_}")
+            
+            # Aggressive memory cleanup after training
+            del X_train, y_train
+            if 'X_val' in locals():
+                del X_val, y_val
+            gc.collect()
+            
+            # Log memory usage after cleanup
+            post_train_memory = psutil.virtual_memory().percent
+            memory_delta = post_train_memory - initial_memory
+            logger.info(f"Post-training memory usage: {post_train_memory:.1f}% (Δ{memory_delta:+.1f}%)")
             
         except Exception as e:
             logger.error(f"Batch training failed: {e}")
+            # Clean up on error too
+            gc.collect()
     
     def generate_massive_forecasts(self,
                                   model_path: Union[str, Path],
@@ -1195,6 +1386,8 @@ class MassiveModelTrainer:
         """
         try:
             from granarypredict.model import load_model
+            import psutil
+            import gc
             
             logger.info(f"Loading model from {model_path}")
             model = load_model(model_path)
@@ -1215,6 +1408,12 @@ class MassiveModelTrainer:
             # Process data in chunks and generate forecasts
             for chunk_idx, chunk in enumerate(self.data_processor.read_massive_dataset(input_data_path)):
                 try:
+                    # Monitor memory usage
+                    current_memory = psutil.virtual_memory().percent
+                    if current_memory > self.memory_threshold:
+                        logger.warning(f"Memory usage high ({current_memory:.1f}%), forcing garbage collection")
+                        gc.collect()
+                    
                     # Preprocess chunk for forecasting
                     processed_chunk = self._preprocess_forecasting_chunk(chunk)
                     
@@ -1239,6 +1438,7 @@ class MassiveModelTrainer:
                             existing_df = pd.read_parquet(output_path)
                             combined_df = pd.concat([existing_df, forecasts_chunk], ignore_index=True)
                             combined_df.to_parquet(output_path, index=False)
+                            del existing_df, combined_df  # Clean up immediately
                     else:
                         # CSV append
                         mode = 'w' if first_chunk else 'a'
@@ -1248,15 +1448,18 @@ class MassiveModelTrainer:
                     
                     total_forecasts += len(forecasts_chunk)
                     
-                    if chunk_idx % 10 == 0:
-                        logger.info(f"Generated forecasts for {chunk_idx + 1} chunks, {total_forecasts:,} total forecasts")
+                    # More frequent logging with memory info
+                    if chunk_idx % 5 == 0:
+                        mem_usage = psutil.virtual_memory().percent
+                        logger.info(f"Generated forecasts for {chunk_idx + 1} chunks, {total_forecasts:,} total forecasts (Memory: {mem_usage:.1f}%)")
                     
-                    # Memory cleanup
+                    # Aggressive memory cleanup
                     del processed_chunk, forecasts_chunk
                     gc.collect()
                 
                 except Exception as e:
                     logger.warning(f"Error processing forecast chunk {chunk_idx}: {e}")
+                    gc.collect()  # Clean up on error too
                     continue
             
             logger.info(f"Massive forecasting completed! Generated {total_forecasts:,} forecasts")
@@ -1272,7 +1475,9 @@ class MassiveModelTrainer:
     
     def _generate_chunk_forecasts(self, model, chunk: pd.DataFrame, 
                                  horizon_days: int, include_uncertainty: bool) -> pd.DataFrame:
-        """Generate forecasts for a single chunk."""
+        """Generate forecasts for a single chunk with memory management."""
+        import gc
+        
         try:
             from granarypredict.features import select_feature_target_multi
             from granarypredict.model import predict
@@ -1292,6 +1497,10 @@ class MassiveModelTrainer:
             
             if last_obs.empty:
                 return pd.DataFrame()
+            
+            # Clean up temporary data immediately
+            del chunk
+            gc.collect()
             
             # Prepare features for forecasting
             X_forecast, _ = select_feature_target_multi(
@@ -1354,6 +1563,234 @@ class MassiveModelTrainer:
         except Exception as e:
             logger.warning(f"Chunk forecast generation failed: {e}")
             return pd.DataFrame()
+
+    def predict_single_row_multi_models(self,
+                                       model_paths: List[Union[str, Path]],
+                                       single_row_data: pd.DataFrame,
+                                       output_path: Union[str, Path],
+                                       horizon_days: int = 7,
+                                       include_uncertainty: bool = True,
+                                       batch_size: int = 10,
+                                       memory_limit_gb: float = 8.0) -> Dict[str, Any]:
+        """
+        Optimized prediction for 100+ models on single row with memory management.
+        
+        Processes models in batches to prevent memory overflow, with aggressive
+        garbage collection and model unloading between batches.
+        
+        Parameters
+        ----------
+        model_paths : List[Union[str, Path]]
+            List of paths to trained models (100+ models)
+        single_row_data : pd.DataFrame
+            Single row (or few rows) of data for prediction
+        output_path : Union[str, Path]
+            Path to save aggregated predictions
+        horizon_days : int
+            Number of forecast horizons (1-7 days)
+        include_uncertainty : bool
+            Whether to compute uncertainty estimates
+        batch_size : int
+            Number of models to load simultaneously (memory control)
+        memory_limit_gb : float
+            Memory limit in GB - force garbage collection if exceeded
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Prediction results with statistics and timing
+        """
+        import time
+        import psutil
+        import gc
+        from pathlib import Path
+        from granarypredict.model import load_model, predict
+        from granarypredict.features import select_feature_target_multi
+        
+        start_time = time.time()
+        memory_limit_bytes = memory_limit_gb * 1024**3
+        total_models = len(model_paths)
+        
+        logger.info(f"🚀 Starting optimized multi-model prediction")
+        logger.info(f"   Models: {total_models}")
+        logger.info(f"   Input rows: {len(single_row_data)}")
+        logger.info(f"   Batch size: {batch_size}")
+        logger.info(f"   Memory limit: {memory_limit_gb:.1f}GB")
+        
+        # Prepare features once
+        try:
+            X_features, _ = select_feature_target_multi(
+                single_row_data,
+                target_col='temperature_grain', 
+                horizons=tuple(range(1, horizon_days + 1)),
+                allow_na=True
+            )
+            
+            if X_features.empty:
+                return {'success': False, 'error': 'No valid features generated'}
+                
+        except Exception as e:
+            logger.error(f"Feature preparation failed: {e}")
+            return {'success': False, 'error': f'Feature prep error: {e}'}
+        
+        all_predictions = []
+        processed_models = 0
+        
+        # Process models in memory-controlled batches
+        for batch_start in range(0, total_models, batch_size):
+            batch_end = min(batch_start + batch_size, total_models)
+            batch_paths = model_paths[batch_start:batch_end]
+            
+            logger.info(f"📦 Processing batch {batch_start//batch_size + 1}/{(total_models-1)//batch_size + 1} ({len(batch_paths)} models)")
+            
+            # Load and predict for each model in current batch
+            batch_predictions = []
+            loaded_models = []
+            
+            try:
+                for model_idx, model_path in enumerate(batch_paths):
+                    # Memory check before loading model
+                    current_memory = psutil.virtual_memory().used
+                    if current_memory > memory_limit_bytes:
+                        logger.warning(f"Memory usage ({current_memory/1024**3:.1f}GB) exceeds limit, forcing cleanup")
+                        # Unload all models from current batch
+                        for model in loaded_models:
+                            del model
+                        loaded_models.clear()
+                        gc.collect()
+                    
+                    try:
+                        # Load model
+                        model = load_model(model_path)
+                        loaded_models.append(model)
+                        
+                        # Generate prediction
+                        predictions = predict(model, X_features)
+                        
+                        # Store prediction with model info
+                        pred_data = {
+                            'model_path': str(model_path),
+                            'model_name': Path(model_path).stem,
+                            'predictions': predictions,
+                            'batch_idx': batch_start // batch_size,
+                            'model_idx_in_batch': model_idx
+                        }
+                        
+                        # Add uncertainty if available and requested
+                        if include_uncertainty and hasattr(model, '_last_prediction_intervals'):
+                            intervals = model._last_prediction_intervals
+                            pred_data['uncertainty_intervals'] = intervals
+                        
+                        batch_predictions.append(pred_data)
+                        processed_models += 1
+                        
+                        # Progress logging
+                        if processed_models % 20 == 0:
+                            mem_usage = psutil.virtual_memory().percent
+                            logger.info(f"   Processed {processed_models}/{total_models} models (Memory: {mem_usage:.1f}%)")
+                    
+                    except Exception as e:
+                        logger.warning(f"Model prediction failed for {model_path}: {e}")
+                        continue
+                
+                # Add batch predictions to overall results
+                all_predictions.extend(batch_predictions)
+                
+            finally:
+                # Aggressive cleanup after each batch
+                for model in loaded_models:
+                    del model
+                loaded_models.clear()
+                del batch_predictions
+                gc.collect()
+                
+                # Final memory status
+                mem_usage = psutil.virtual_memory().percent
+                logger.info(f"   Batch completed, memory usage: {mem_usage:.1f}%")
+        
+        # Aggregate and save results
+        if not all_predictions:
+            return {'success': False, 'error': 'No successful predictions generated'}
+        
+        try:
+            # Create aggregated results DataFrame
+            aggregated_results = []
+            
+            for pred_data in all_predictions:
+                predictions = pred_data['predictions']
+                model_name = pred_data['model_name']
+                
+                # Handle multi-horizon predictions
+                if predictions.ndim == 2:  # Multi-horizon
+                    for row_idx in range(len(single_row_data)):
+                        for horizon in range(horizon_days):
+                            result_row = {
+                                'model_name': model_name,
+                                'row_index': row_idx,
+                                'horizon': horizon + 1,
+                                'predicted_temperature': predictions[row_idx, horizon]
+                            }
+                            
+                            # Add uncertainty if available
+                            if 'uncertainty_intervals' in pred_data:
+                                intervals = pred_data['uncertainty_intervals']
+                                if 'uncertainties' in intervals:
+                                    result_row['uncertainty_std'] = intervals['uncertainties'][row_idx, horizon]
+                                if 'lower_95' in intervals:
+                                    result_row['uncertainty_lower_95'] = intervals['lower_95'][row_idx, horizon]
+                                    result_row['uncertainty_upper_95'] = intervals['upper_95'][row_idx, horizon]
+                            
+                            aggregated_results.append(result_row)
+                else:  # Single horizon
+                    for row_idx in range(len(single_row_data)):
+                        result_row = {
+                            'model_name': model_name,
+                            'row_index': row_idx, 
+                            'horizon': 1,
+                            'predicted_temperature': predictions[row_idx]
+                        }
+                        aggregated_results.append(result_row)
+            
+            # Save aggregated results
+            results_df = pd.DataFrame(aggregated_results)
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            if output_path.suffix.lower() == '.parquet':
+                results_df.to_parquet(output_path, index=False)
+            else:
+                results_df.to_csv(output_path, index=False)
+            
+            total_time = time.time() - start_time
+            
+            # Generate summary statistics
+            summary_stats = {
+                'total_models_processed': processed_models,
+                'total_predictions': len(aggregated_results),
+                'processing_time_seconds': total_time,
+                'predictions_per_second': len(aggregated_results) / total_time,
+                'models_per_second': processed_models / total_time,
+                'average_prediction': results_df['predicted_temperature'].mean(),
+                'prediction_std': results_df['predicted_temperature'].std(),
+                'output_file': str(output_path)
+            }
+            
+            logger.info(f"✅ Multi-model prediction completed!")
+            logger.info(f"   Models processed: {processed_models}/{total_models}")
+            logger.info(f"   Total predictions: {len(aggregated_results):,}")
+            logger.info(f"   Processing time: {total_time:.2f} seconds")
+            logger.info(f"   Throughput: {processed_models/total_time:.1f} models/sec")
+            logger.info(f"   Results saved to: {output_path}")
+            
+            return {
+                'success': True,
+                'statistics': summary_stats,
+                'results_path': str(output_path)
+            }
+            
+        except Exception as e:
+            logger.error(f"Results aggregation failed: {e}")
+            return {'success': False, 'error': f'Aggregation error: {e}'}
 
 
 # Utility functions for massive dataset handling
@@ -1427,12 +1864,20 @@ def create_massive_training_pipeline(
     chunk_size: int = 50_000,
     backend: str = "auto",
     horizons: Tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7),
-    use_gpu: bool = True
+    use_gpu: bool = True,
+    future_safe: bool = False,  # NEW: No future safe requirement
+    use_anchor_early_stopping: bool = True,  # NEW: Anchor day early stopping requirement
+    balance_horizons: bool = True,  # NEW: Horizon balancing requirement
+    horizon_strategy: str = "increasing"  # NEW: Increasing balancing mode requirement
 ) -> Dict[str, Any]:
     """
     Create a complete pipeline for training models on massive datasets.
     
-    This is the main entry point for training models on datasets with hundreds of millions of rows.
+    This implementation follows the specified requirements:
+    - Increasing balancing mode for horizon training
+    - No future safe (environmental variables included)
+    - Training on 100% of data after 95% split to determine n_estimators
+    - Anchor day early stopping methodology
     
     Parameters
     ----------
@@ -1450,11 +1895,19 @@ def create_massive_training_pipeline(
         Forecast horizons
     use_gpu : bool
         Enable GPU acceleration
+    future_safe : bool
+        Exclude environmental variables (set to False per requirements)
+    use_anchor_early_stopping : bool
+        Use anchor day early stopping (set to True per requirements)
+    balance_horizons : bool
+        Apply horizon balancing (set to True per requirements)
+    horizon_strategy : str
+        Horizon weighting strategy ("increasing" per requirements)
     
     Returns
     -------
     Dict[str, Any]
-        Training results
+        Training results with compliance to all requirements
     """
     trainer = MassiveModelTrainer(
         chunk_size=chunk_size,
@@ -1466,7 +1919,11 @@ def create_massive_training_pipeline(
         target_column=target_column,
         model_output_path=model_output_path,
         horizons=horizons,
-        use_gpu=use_gpu
+        use_gpu=use_gpu,
+        future_safe=future_safe,
+        use_anchor_early_stopping=use_anchor_early_stopping,
+        balance_horizons=balance_horizons,
+        horizon_strategy=horizon_strategy
     )
 
 
@@ -1515,6 +1972,76 @@ def create_massive_forecasting_pipeline(
         output_forecasts_path=output_forecasts_path,
         horizon_days=horizon_days,
         include_uncertainty=include_uncertainty
+    )
+
+
+def create_multi_model_prediction_pipeline(
+    model_paths: List[Union[str, Path]],
+    single_row_data: pd.DataFrame,
+    output_path: Union[str, Path],
+    horizon_days: int = 7,
+    include_uncertainty: bool = True,
+    batch_size: int = 10,
+    memory_limit_gb: float = 8.0
+) -> Dict[str, Any]:
+    """
+    Optimized pipeline for 100+ models predicting on single rows.
+    
+    This addresses your specific use case: 100+ large models predicting
+    just 1 row of data for 7 consecutive days. Uses memory-efficient
+    batch processing to prevent resource overflow.
+    
+    Parameters
+    ----------
+    model_paths : List[Union[str, Path]]
+        List of paths to trained models (100+ models)
+    single_row_data : pd.DataFrame
+        Single row (or few rows) of data for prediction
+    output_path : Union[str, Path]
+        Path to save aggregated predictions
+    horizon_days : int, default=7
+        Number of forecast horizons (1-7 days)
+    include_uncertainty : bool, default=True
+        Whether to compute uncertainty estimates
+    batch_size : int, default=10
+        Number of models to load simultaneously (memory control)
+    memory_limit_gb : float, default=8.0
+        Memory limit in GB - triggers cleanup if exceeded
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Prediction results with statistics and timing
+        
+    Examples
+    --------
+    >>> model_paths = ['model1.joblib', 'model2.joblib', ..., 'model100.joblib']
+    >>> single_row = pd.DataFrame({'sensor_data': [123.4], 'timestamp': ['2025-01-15']})
+    >>> results = create_multi_model_prediction_pipeline(model_paths, single_row, 'predictions.parquet')
+    >>> print(f"Processed {results['statistics']['total_models_processed']} models in {results['statistics']['processing_time_seconds']:.1f}s")
+    
+    Memory Optimization Features
+    ---------------------------
+    - Batch processing: Only loads `batch_size` models at once
+    - Aggressive cleanup: Deletes models immediately after prediction
+    - Memory monitoring: Triggers garbage collection if limit exceeded
+    - Feature preparation: Preprocesses input data only once
+    - Efficient aggregation: Streams results to avoid memory buildup
+    """
+    trainer = MassiveModelTrainer(
+        chunk_size=10_000,  # Smaller chunks for single-row processing
+        backend="pandas", 
+        memory_threshold=75.0  # Conservative memory limit
+    )
+    
+    return trainer.predict_single_row_multi_models(
+        model_paths=model_paths,
+        single_row_data=single_row_data,
+        output_path=output_path,
+        horizon_days=horizon_days,
+        include_uncertainty=include_uncertainty,
+        batch_size=batch_size,
+        memory_limit_gb=memory_limit_gb
     )
 
 

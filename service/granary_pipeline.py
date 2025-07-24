@@ -615,31 +615,31 @@ if GPU_AVAILABLE:
     if GPU_CONFIG:
         gpu_id = GPU_CONFIG.get('gpu_device_id', 'unknown')
         max_bin = GPU_CONFIG.get('max_bin', 'default')
-        logger.info(f"🎯 GPU Configuration: Device {gpu_id}, max_bin={max_bin}")
+        logger.info(f"TARGET GPU Configuration: Device {gpu_id}, max_bin={max_bin}")
 else:
-    logger.info(f"⚠️ GPU acceleration disabled, using CPU: {GPU_INFO}")
+    logger.info(f"WARNING GPU acceleration disabled, using CPU: {GPU_INFO}")
 
 # Log detected GPU details if available
 gpu_details = detect_available_gpus()
 if gpu_details['gpus']:
-    logger.info(f"🔍 GPU Detection Summary: {gpu_details['total_gpus']} GPU(s) found via {gpu_details['detection_method']}")
+    logger.info(f"SEARCH GPU Detection Summary: {gpu_details['total_gpus']} GPU(s) found via {gpu_details['detection_method']}")
     for gpu in gpu_details['gpus']:
         logger.info(f"   GPU {gpu['id']}: {gpu['name']} ({gpu['memory_total_mb']:.0f}MB, "
                    f"{gpu['memory_free_mb']:.0f}MB free, {gpu['gpu_utilization']}% util)")
 else:
-    logger.info("🔍 GPU Detection: No GPUs detected on system")
+    logger.info("SEARCH GPU Detection: No GPUs detected on system")
 
 # Log GPU data processing backend information
 if HAS_GPU_DATA_UTILS:
     gpu_backend_info = get_gpu_data_backend_info()
     if gpu_backend_info['cudf_available']:
-        logger.info(f"🚀 GPU Data Processing: cuDF available (10-150x speedup for large datasets)")
+        logger.info(f"ROCKET GPU Data Processing: cuDF available (10-150x speedup for large datasets)")
         if 'gpu_memory_mb' in gpu_backend_info and gpu_backend_info['gpu_memory_mb'] != 'unknown':
             logger.info(f"   GPU Memory: {gpu_backend_info['gpu_memory_mb']:.0f}MB total, {gpu_backend_info['gpu_memory_free_mb']:.0f}MB free")
     else:
-        logger.info(f"⚡ GPU Data Processing: cuDF not available, using Polars/pandas fallback")
+        logger.info(f"SPEED GPU Data Processing: cuDF not available, using Polars/pandas fallback")
 else:
-    logger.info("🐼 GPU Data Processing: Standard pandas/Polars processing (install cudf for massive speedups)")
+    logger.info("PANDA GPU Data Processing: Standard pandas/Polars processing (install cudf for massive speedups)")
 
 # Constants
 TARGET_TEMP_COL = 'temperature_grain'
