@@ -1,0 +1,23 @@
+# GPU Acceleration Requirements for SiloFlow
+# Install these for maximum performance with GPU-accelerated data processing
+
+# Basic GPU support (for multi-GPU detection and training)
+pynvml>=11.4.1
+
+# RAPIDS cuDF for GPU-accelerated data processing (10-150x speedup)
+# Choose ONE of the following based on your CUDA version:
+
+# Option 1: OpenCL support (for AMD/Intel GPUs)
+pyopencl>=2023.1
+
+# Option 1: CUDA 11.8 (most common)
+cudf-cu11>=23.10; python_version>="3.9"
+cupy-cuda11x>=12.0; python_version>="3.9"
+
+# Option 2: CUDA 12.x (latest)
+# cudf-cu12>=23.10; python_version>="3.9"
+# cupy-cuda12x>=12.0; python_version>="3.9"
+
+# Optional: Additional RAPIDS packages for advanced GPU computing
+# cugraph-cu11>=23.10; python_version>="3.9"  # GPU graph analytics
+# cuspatial-cu11>=23.10; python_version>="3.9"  # GPU spatial analytics

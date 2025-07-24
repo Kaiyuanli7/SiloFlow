@@ -37,8 +37,8 @@ if not logger.handlers:
 class AutomatedGranaryProcessor:
     def __init__(self):
         # Use centralized data path manager
-        from .utils.data_paths import data_paths
-        from .utils.silo_filtering import get_existing_silo_files
+        from utils.data_paths import data_paths
+        from utils.silo_filtering import get_existing_silo_files
         self.data_paths = data_paths
         
         # Get standardized directory paths
@@ -80,7 +80,7 @@ class AutomatedGranaryProcessor:
     
     def _get_existing_silo_files(self, granary_name: str) -> set:
         """Get set of existing silo files for a granary using centralized utility"""
-        from .utils.silo_filtering import get_existing_silo_files
+        from utils.silo_filtering import get_existing_silo_files
         return get_existing_silo_files(granary_name)
         
     def _cleanup(self):

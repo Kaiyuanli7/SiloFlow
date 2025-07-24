@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import gc
 from typing import Tuple
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import multiprocessing
@@ -21,8 +22,10 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Global setting for parallel processing
-_USE_PARALLEL = True  # Can be toggled off for debugging
-_MAX_WORKERS = min(multiprocessing.cpu_count(), 8)  # Reasonable limit
+# Check environment variable to disable parallel processing for batch operations
+_USE_PARALLEL = os.environ.get("SILOFLOW_DISABLE_PARALLEL", "0") != "1"
+# More conservative max workers for better memory management on Windows
+_MAX_WORKERS = min(multiprocessing.cpu_count(), 4)  # Conservative limit for stability
 
 def _toast_notify(message: str, icon: str = ""):
     """Helper function to show toast notifications if Streamlit is available."""
@@ -293,7 +296,10 @@ def _add_single_lag(df: pd.DataFrame, lag_days: int, *,
                     temp_col: str = "temperature_grain",
                     timestamp_col: str = "detection_time") -> pd.DataFrame:
     """Return *df* with a new column ``lag_temp_<lag>d`` computed exactly like
-    ``add_sensor_lag`` but for an arbitrary day offset."""
+    ``add_sensor_lag`` but for an arbitrary day offset.
+    
+    Memory-optimized version using groupby.shift instead of merge operations.
+    """
 
     if lag_days == 1:
         # Already handled by original add_sensor_lag; skip duplication.
@@ -304,21 +310,68 @@ def _add_single_lag(df: pd.DataFrame, lag_days: int, *,
         df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
 
         group_cols = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in df.columns]
-        df["_date"] = df[timestamp_col].dt.floor("D")
-
-        lag_df = df[group_cols + ["_date", temp_col]].copy()
-        lag_df["_date"] = lag_df["_date"] + pd.Timedelta(days=lag_days)
-        lag_df.rename(columns={temp_col: f"lag_temp_{lag_days}d"}, inplace=True)
-
-        df = df.merge(lag_df, on=group_cols + ["_date"], how="left")
-        df.drop(columns=["_date"], inplace=True)
+        lag_col_name = f"lag_temp_{lag_days}d"
+        
+        try:
+            # Memory-efficient approach: use groupby.shift instead of merge
+            # Sort by group and time to ensure proper lag computation
+            df_sorted = df.sort_values(group_cols + [timestamp_col])
+            
+            # Use groupby.shift for memory efficiency
+            df_sorted[lag_col_name] = (
+                df_sorted
+                .groupby(group_cols)[temp_col]
+                .shift(lag_days)
+            )
+            
+            # Restore original order
+            df[lag_col_name] = df_sorted.loc[df.index, lag_col_name]
+            
+            # Memory cleanup
+            del df_sorted
+            gc.collect()
+            
+        except Exception as e:
+            # Fallback to chunked processing if groupby fails
+            _toast_notify(f"⚠️ Using chunked lag computation for {lag_days}d lag", "⚠️")
+            
+            # Process in chunks to avoid memory issues
+            chunk_size = 25_000  # Conservative chunk size
+            lag_values = pd.Series(index=df.index, dtype='float64')
+            
+            for group_name, group_df in df.groupby(group_cols):
+                if len(group_df) > chunk_size:
+                    # Large group - process in chunks
+                    group_sorted = group_df.sort_values(timestamp_col)
+                    for i in range(0, len(group_sorted), chunk_size):
+                        chunk = group_sorted.iloc[i:i+chunk_size]
+                        chunk_lag = chunk[temp_col].shift(lag_days)
+                        lag_values.loc[chunk.index] = chunk_lag
+                        
+                        # Memory cleanup
+                        del chunk, chunk_lag
+                        gc.collect()
+                else:
+                    # Small group - process normally
+                    group_sorted = group_df.sort_values(timestamp_col)
+                    group_lag = group_sorted[temp_col].shift(lag_days)
+                    lag_values.loc[group_sorted.index] = group_lag
+                    
+                    # Memory cleanup
+                    del group_sorted, group_lag
+                    gc.collect()
+            
+            df[lag_col_name] = lag_values
+            del lag_values
+            gc.collect()
+            
     return df
 
 
 def add_multi_lag(
     df: pd.DataFrame,
     *,
-    lags: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30),
+    lags: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7),
     temp_col: str = "temperature_grain",
     timestamp_col: str = "detection_time",
 ) -> pd.DataFrame:
@@ -746,8 +799,34 @@ def add_multi_lag_parallel(
     Processes multiple lag computations in parallel using ProcessPoolExecutor.
     Falls back to sequential processing if parallelization fails.
     """
-    if not _USE_PARALLEL or len(lags) < 2:
-        _toast_notify("🔄 Using sequential lag computation (parallel disabled or insufficient lags)", "🔄")
+    # Check if we should use parallel processing
+    should_use_parallel = (
+        _USE_PARALLEL and 
+        len(lags) >= 3 and  # Need at least 3 lags to benefit from parallel
+        len(df) >= 10000    # Only use parallel for larger datasets
+    )
+    
+    # Additional safety checks for Windows systems
+    if should_use_parallel:
+        try:
+            import platform
+            if platform.system() == "Windows":
+                # On Windows, be extra conservative with memory usage
+                import psutil
+                memory = psutil.virtual_memory()
+                if memory.percent > 80:  # If memory usage > 80%
+                    should_use_parallel = False
+                    _toast_notify("🔄 Using sequential processing due to high memory usage", "⚠️")
+                elif len(df) > 100000:  # Very large datasets
+                    should_use_parallel = False
+                    _toast_notify("🔄 Using sequential processing for very large dataset", "⚠️")
+        except ImportError:
+            pass  # psutil not available
+        except Exception:
+            should_use_parallel = False  # Any error, fall back to sequential
+    
+    if not should_use_parallel:
+        _toast_notify("🔄 Using sequential lag computation (safety/performance optimization)", "🔄")
         return add_multi_lag(df, lags=lags, temp_col=temp_col, timestamp_col=timestamp_col)
     
     # Always include the 1-day lag via the dedicated helper for efficiency
@@ -758,27 +837,35 @@ def add_multi_lag_parallel(
     
     if not additional_lags:
         return df
-        
-    max_workers = max_workers or min(_MAX_WORKERS, len(additional_lags))
+    
+    # Very conservative worker count to prevent resource exhaustion on Windows
+    max_workers = max_workers or min(_MAX_WORKERS, len(additional_lags), 2)  # Max 2 workers
     
     _toast_notify(f"Parallel lag computation: {len(additional_lags)} lags using {max_workers} processes", "")
     
     try:
+        # Create a minimal subset of the dataframe for workers to reduce memory usage
+        worker_cols = [col for col in [temp_col, timestamp_col, "granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if col in df.columns]
+        worker_df = df[worker_cols].copy()
+        
+        # Try to reduce memory footprint even further
+        worker_df = worker_df.iloc[::2].copy()  # Sample every other row for lag computation
+        
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Submit lag computation tasks
+            # Submit lag computation tasks with timeout and chunking
             futures = []
             for lag_days in additional_lags:
-                future = executor.submit(_compute_single_lag_worker, df, lag_days, temp_col, timestamp_col)
+                future = executor.submit(_compute_single_lag_worker, worker_df, lag_days, temp_col, timestamp_col)
                 futures.append((lag_days, future))
             
-            # Collect results
+            # Collect results with better error handling
             lag_results = {}
             for lag_days, future in futures:
                 try:
-                    lag_results[lag_days] = future.result(timeout=60)  # 60s timeout per lag
+                    lag_results[lag_days] = future.result(timeout=180)  # 3 min timeout per lag
                 except Exception as e:
                     logger.warning(f"Parallel lag computation failed for lag {lag_days}: {e}")
-                    _toast_notify(f"Lag {lag_days}d failed, using sequential fallback", "")
+                    _toast_notify(f"Lag {lag_days}d failed, using sequential fallback", "⚠️")
                     # Fall back to sequential for this lag
                     lag_results[lag_days] = _add_single_lag(df, lag_days, temp_col=temp_col, timestamp_col=timestamp_col)
             
@@ -788,12 +875,12 @@ def add_multi_lag_parallel(
                 if lag_col in lag_df.columns:
                     df[lag_col] = lag_df[lag_col]
         
-        _toast_notify(f"Parallel lag computation completed: {len(additional_lags)} lags processed", "")
+        _toast_notify(f"✅ Parallel lag computation completed: {len(additional_lags)} lags processed", "✅")
         
     except Exception as e:
-        logger.warning(f"Parallel lag computation failed, falling back to sequential: {e}")
-        _toast_notify(f"Parallel lag computation failed: {str(e)[:50]}... Using sequential fallback", "")
-        # Fall back to sequential processing
+        logger.warning(f"Parallel lag computation failed completely, falling back to sequential: {e}")
+        _toast_notify(f"⚠️ Parallel processing failed: {str(e)[:50]}... Using sequential fallback", "⚠️")
+        # Fall back to sequential processing for all remaining lags
         for d in additional_lags:
             df = _add_single_lag(df, d, temp_col=temp_col, timestamp_col=timestamp_col)
     

@@ -13,8 +13,8 @@ if str(granarypredict_dir) not in sys.path:
     sys.path.insert(0, str(granarypredict_dir))
 
 # Local imports to avoid circular dependencies
-from .automated_processor import AutomatedGranaryProcessor  # noqa: E402
-from .utils.data_paths import data_paths  # noqa: E402
+from automated_processor import AutomatedGranaryProcessor  # noqa: E402
+from utils.data_paths import data_paths  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

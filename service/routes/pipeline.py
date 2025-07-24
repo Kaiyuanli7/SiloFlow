@@ -10,7 +10,7 @@ import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from ..core import processor  # Singleton
+from core import processor  # Singleton
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
