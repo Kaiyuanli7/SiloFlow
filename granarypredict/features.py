@@ -34,7 +34,13 @@ def _toast_notify(message: str, icon: str = ""):
             st.toast(message, icon=icon)
         except Exception:
             pass  # Silently fail if toast doesn't work
-    logger.info(message)
+    # Clean message for safe logging (remove emojis that cause encoding issues)
+    clean_message = message.encode('ascii', 'ignore').decode('ascii')
+    if clean_message.strip():
+        logger.info(clean_message)
+    else:
+        # If message is all emojis, log a basic message
+        logger.info("Processing notification")
 
 
 def create_time_features(
