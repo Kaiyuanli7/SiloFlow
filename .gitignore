@@ -4,17 +4,34 @@ __pycache__/
 *$py.class
 
 # Data & model artefacts  
-data/*
+data/
 !data/.gitkeep
 !data/*/.gitkeep
-models/*
+models/
 !models/.gitkeep
 !models/*/.gitkeep
-service/data/*
+service/data/
 !service/data/.gitkeep
 !service/data/*/.gitkeep
-optuna_cache/*
+app/data/
+!app/data/.gitkeep
+!app/data/*/.gitkeep
+optuna_cache/
 !optuna_cache/.gitkeep
+
+# Data folders at any level
+**/data/
+**/models/
+**/optuna_cache/
+**/temp_uploads/
+**/processed/
+**/raw/
+**/forecasts/
+**/preloaded/
+**/cache/
+
+# Keep .gitkeep files in data directories
+!**/.gitkeep
 
 # Virtual environments
 .env/
@@ -31,9 +48,12 @@ build/
 
 # Logs
 *.log
+*.log.*
+logs/
+**/logs/
 
 # Data & model artefacts
-optuna_cache/*
+optuna_cache/
 
 # Jupyter Notebooks
 *.ipynb_checkpoints

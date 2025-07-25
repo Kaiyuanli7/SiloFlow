@@ -344,6 +344,7 @@ class SiloFlowTester:
         
         # Create tabs with enhanced styling
         self.create_http_service_tab()
+        self.create_forecast_testing_tab()
         self.create_remote_client_tab()
         self.create_simple_retrieval_tab()
         self.create_batch_processing_tab()
@@ -497,7 +498,7 @@ class SiloFlowTester:
         endpoint_combo = ttk.Combobox(
             endpoint_section,
             textvariable=self.endpoint_var,
-            values=["/health", "/models", "/sort", "/process", "/train", "/forecast", "/pipeline"],
+            values=["/health", "/models", "/sort", "/process", "/train", "/pipeline"],
             state="readonly",
             font=('Segoe UI', 10),
             style='Modern.TCombobox'
@@ -538,6 +539,135 @@ class SiloFlowTester:
         status_label = tk.Label(
             status_frame,
             textvariable=self.http_status_var,
+            bg=self.colors['surface'],
+            fg=self.colors['text_secondary'],
+            font=('Segoe UI', 9),
+            anchor='w'
+        )
+        status_label.pack(side='left', padx=15, pady=8)
+        
+    def create_forecast_testing_tab(self):
+        """Create Forecast Testing tab for the new parameter-based forecast endpoint"""
+        forecast_frame = ttk.Frame(self.notebook)
+        self.notebook.add(forecast_frame, text="🔮 Forecast Testing")
+        
+        # Configure grid
+        forecast_frame.columnconfigure(1, weight=1)
+        forecast_frame.rowconfigure(4, weight=1)
+        
+        # Service Configuration Section
+        config_section = self.create_section_frame(forecast_frame, "Service Configuration", "⚙️")
+        config_section.grid(row=0, column=0, columnspan=3, sticky="ew", pady=10, padx=15)
+        config_section.columnconfigure(1, weight=1)
+        
+        # Service URL
+        tk.Label(config_section, text="Service URL:", font=('Segoe UI', 10, 'bold'), 
+                fg=self.colors['text_primary'], bg='white').grid(row=0, column=0, sticky="w", pady=8)
+        self.forecast_url_var = tk.StringVar(value=self.service_url)
+        url_entry = ttk.Entry(config_section, textvariable=self.forecast_url_var, font=('Segoe UI', 10), style='Modern.TEntry')
+        url_entry.grid(row=0, column=1, sticky="ew", pady=8, padx=(10, 0))
+        
+        # Quick URL buttons
+        url_buttons_frame = tk.Frame(config_section, bg='white')
+        url_buttons_frame.grid(row=0, column=2, padx=(10, 0), pady=8)
+        
+        self.create_modern_button(url_buttons_frame, "Local", 
+                                 lambda: self.forecast_url_var.set("http://localhost:8000"), 
+                                 "Primary.TButton").pack(side=tk.LEFT, padx=(0, 5))
+        self.create_modern_button(url_buttons_frame, "Remote", 
+                                 lambda: self.forecast_url_var.set(self.remote_service_url),
+                                 "Success.TButton").pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Forecast Parameters Section
+        params_section = self.create_section_frame(forecast_frame, "Forecast Parameters", "🎯")
+        params_section.grid(row=1, column=0, columnspan=3, sticky="ew", pady=10, padx=15)
+        params_section.columnconfigure(1, weight=1)
+        
+        # Granary Name
+        tk.Label(params_section, text="Granary Name:", font=('Segoe UI', 10, 'bold'), 
+                fg=self.colors['text_primary'], bg='white').grid(row=0, column=0, sticky="w", pady=8)
+        self.granary_name_var = tk.StringVar(value="中软粮情验证")
+        granary_entry = ttk.Entry(params_section, textvariable=self.granary_name_var, font=('Segoe UI', 10), style='Modern.TEntry')
+        granary_entry.grid(row=0, column=1, sticky="ew", pady=8, padx=(10, 0))
+        
+        # Silo ID
+        tk.Label(params_section, text="Silo ID:", font=('Segoe UI', 10, 'bold'), 
+                fg=self.colors['text_primary'], bg='white').grid(row=1, column=0, sticky="w", pady=8)
+        self.silo_id_var = tk.StringVar(value="H1")
+        silo_entry = ttk.Entry(params_section, textvariable=self.silo_id_var, font=('Segoe UI', 10), style='Modern.TEntry')
+        silo_entry.grid(row=1, column=1, sticky="ew", pady=8, padx=(10, 0))
+        
+        # Horizon Days
+        tk.Label(params_section, text="Horizon Days:", font=('Segoe UI', 10, 'bold'), 
+                fg=self.colors['text_primary'], bg='white').grid(row=2, column=0, sticky="w", pady=8)
+        self.horizon_days_var = tk.StringVar(value="7")
+        horizon_entry = ttk.Entry(params_section, textvariable=self.horizon_days_var, font=('Segoe UI', 10), style='Modern.TEntry')
+        horizon_entry.grid(row=2, column=1, sticky="ew", pady=8, padx=(10, 0))
+        
+        # Quick test examples
+        examples_frame = tk.Frame(params_section, bg='white')
+        examples_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=8)
+        
+        tk.Label(examples_frame, text="Quick Examples:", font=('Segoe UI', 9, 'bold'), 
+                fg=self.colors['text_secondary'], bg='white').pack(anchor='w')
+        
+        example_buttons_frame = tk.Frame(examples_frame, bg='white')
+        example_buttons_frame.pack(anchor='w', pady=(5, 0))
+        
+        def set_example_1():
+            self.granary_name_var.set("中软粮情验证")
+            self.silo_id_var.set("H1")
+            self.horizon_days_var.set("7")
+            
+        def set_example_2():
+            self.granary_name_var.set("中正粮食储备库")
+            self.silo_id_var.set("H2")
+            self.horizon_days_var.set("14")
+        
+        self.create_modern_button(example_buttons_frame, "Example 1", set_example_1, "Primary.TButton").pack(side=tk.LEFT, padx=(0, 5))
+        self.create_modern_button(example_buttons_frame, "Example 2", set_example_2, "Success.TButton").pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Action Buttons Section
+        action_section = self.create_section_frame(forecast_frame, "Actions", "🚀")
+        action_section.grid(row=2, column=0, columnspan=3, sticky="ew", pady=10, padx=15)
+        
+        action_buttons_frame = tk.Frame(action_section, bg='white')
+        action_buttons_frame.pack(pady=10)
+        
+        self.create_modern_button(action_buttons_frame, "🔮 Generate Forecast", self.send_forecast_request, "Success.TButton").pack(side=tk.LEFT, padx=(0, 10))
+        self.create_modern_button(action_buttons_frame, "🔍 Test Connection", self.test_forecast_connection, "Warning.TButton").pack(side=tk.LEFT, padx=(0, 10))
+        self.create_modern_button(action_buttons_frame, "📋 Clear Results", self.clear_forecast_results, "Primary.TButton").pack(side=tk.LEFT)
+        
+        # Response Section
+        response_section = self.create_section_frame(forecast_frame, "Forecast Results", "📊")
+        response_section.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=10, padx=15)
+        response_section.columnconfigure(0, weight=1)
+        response_section.rowconfigure(0, weight=1)
+        
+        # Response text with modern styling
+        self.forecast_response_text = scrolledtext.ScrolledText(
+            response_section, 
+            height=15, 
+            width=80,
+            font=('Consolas', 9),
+            bg='#F8F9FA',
+            fg=self.colors['text_primary'],
+            selectbackground=self.colors['primary'],
+            wrap=tk.WORD,
+            padx=10,
+            pady=10
+        )
+        self.forecast_response_text.grid(row=0, column=0, sticky="nsew", pady=5)
+        
+        # Status bar
+        status_frame = tk.Frame(forecast_frame, bg=self.colors['surface'], height=35)
+        status_frame.grid(row=4, column=0, columnspan=3, sticky="ew", padx=15, pady=(0, 10))
+        status_frame.pack_propagate(False)
+        
+        self.forecast_status_var = tk.StringVar(value="Ready - Enter granary name and silo ID to generate forecasts")
+        status_label = tk.Label(
+            status_frame,
+            textvariable=self.forecast_status_var,
             bg=self.colors['surface'],
             fg=self.colors['text_secondary'],
             font=('Segoe UI', 9),
@@ -590,7 +720,7 @@ class SiloFlowTester:
         remote_endpoint_combo = ttk.Combobox(
             endpoint_frame,
             textvariable=self.remote_endpoint_var,
-            values=["/health", "/models", "/sort", "/process", "/train", "/forecast", "/pipeline"],
+            values=["/health", "/models", "/sort", "/process", "/train", "/pipeline"],
             state="readonly",
             width=20
         )
@@ -1579,6 +1709,222 @@ class SiloFlowTester:
         self.http_response_text.insert(tk.END, f"Error: {message}\n")
 
     # ------------------------------------------------------------------
+    # FORECAST TESTING METHODS
+    # ------------------------------------------------------------------
+    
+    def send_forecast_request(self):
+        """Send forecast request using the new parameter-based endpoint"""
+        # Get configuration
+        service_url = self.forecast_url_var.get().rstrip('/')
+        granary_name = self.granary_name_var.get().strip()
+        silo_id = self.silo_id_var.get().strip()
+        horizon_days = self.horizon_days_var.get().strip()
+        
+        # Validate inputs
+        if not service_url:
+            messagebox.showerror("URL Required", "Please enter a service URL first.")
+            return
+            
+        if not granary_name:
+            messagebox.showerror("Granary Required", "Please enter a granary name.")
+            return
+            
+        if not silo_id:
+            messagebox.showerror("Silo Required", "Please enter a silo ID.")
+            return
+            
+        try:
+            horizon_days_int = int(horizon_days) if horizon_days else 7
+            if horizon_days_int < 1 or horizon_days_int > 30:
+                messagebox.showerror("Invalid Horizon", "Horizon days must be between 1 and 30.")
+                return
+        except ValueError:
+            messagebox.showerror("Invalid Horizon", "Horizon days must be a valid number.")
+            return
+        
+        # Clear response area
+        self.forecast_response_text.delete(1.0, tk.END)
+        self.forecast_response_text.insert(tk.END, f"🔮 Generating Forecast\n")
+        self.forecast_response_text.insert(tk.END, "=" * 50 + "\n")
+        self.forecast_response_text.insert(tk.END, f"📍 URL: {service_url}/forecast\n")
+        self.forecast_response_text.insert(tk.END, f"🏭 Granary: {granary_name}\n")
+        self.forecast_response_text.insert(tk.END, f"🗄️ Silo: {silo_id}\n")
+        self.forecast_response_text.insert(tk.END, f"📅 Horizon: {horizon_days_int} days\n")
+        self.forecast_response_text.insert(tk.END, f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        self.forecast_response_text.insert(tk.END, "🔄 Processing request...\n")
+        self.forecast_response_text.insert(tk.END, "-" * 50 + "\n\n")
+        
+        # Update status
+        self.forecast_status_var.set(f"🔄 Generating forecast for {granary_name}/{silo_id}...")
+        
+        # Launch request in background thread
+        thread = threading.Thread(target=self._send_forecast_request_thread, 
+                                args=(service_url, granary_name, silo_id, horizon_days_int))
+        thread.daemon = True
+        thread.start()
+        
+    def _send_forecast_request_thread(self, service_url, granary_name, silo_id, horizon_days):
+        """Send forecast request in background thread"""
+        try:
+            # Build URL with query parameters
+            params = {
+                'granary_name': granary_name,
+                'silo_id': silo_id,
+                'horizon_days': horizon_days
+            }
+            
+            full_url = f"{service_url}/forecast"
+            response = requests.get(full_url, params=params, timeout=120)
+            
+            # Update GUI with response
+            self.root.after(0, self._update_forecast_response, response)
+            
+        except requests.exceptions.ConnectionError:
+            self.root.after(0, self._show_forecast_error, "Connection Error", 
+                          "Could not connect to the service. Make sure it's running on the specified URL.")
+        except requests.exceptions.Timeout:
+            self.root.after(0, self._show_forecast_error, "Timeout Error", 
+                          "Request timed out after 2 minutes. The service may still be processing.")
+        except Exception as e:
+            self.root.after(0, self._show_forecast_error, "Error", f"An error occurred: {str(e)}")
+            
+    def _update_forecast_response(self, response):
+        """Update GUI with forecast response results"""
+        try:
+            # Display response details
+            self.forecast_response_text.insert(tk.END, f"📊 Response Details\n")
+            self.forecast_response_text.insert(tk.END, f"Status Code: {response.status_code}\n")
+            self.forecast_response_text.insert(tk.END, f"Response Time: {response.elapsed.total_seconds():.2f}s\n")
+            self.forecast_response_text.insert(tk.END, f"Content-Type: {response.headers.get('content-type', 'Unknown')}\n")
+            self.forecast_response_text.insert(tk.END, "-" * 50 + "\n\n")
+            
+            if response.status_code == 200:
+                try:
+                    json_response = response.json()
+                    
+                    # Display summary information
+                    self.forecast_response_text.insert(tk.END, f"✅ Forecast Generated Successfully\n")
+                    self.forecast_response_text.insert(tk.END, f"🏭 Granary: {json_response.get('granary_name', 'N/A')}\n")
+                    self.forecast_response_text.insert(tk.END, f"🗄️ Silo: {json_response.get('silo_id', 'N/A')}\n")
+                    self.forecast_response_text.insert(tk.END, f"📅 Horizon: {json_response.get('horizon_days', 'N/A')} days\n")
+                    self.forecast_response_text.insert(tk.END, f"📈 Latest Data: {json_response.get('latest_data_date', 'N/A')}\n")
+                    self.forecast_response_text.insert(tk.END, f"📡 Sensors Used: {json_response.get('sensors_used', 'N/A')}\n")
+                    
+                    # Display summary statistics
+                    summary = json_response.get('summary', {})
+                    if summary:
+                        self.forecast_response_text.insert(tk.END, f"\n📊 Forecast Summary\n")
+                        self.forecast_response_text.insert(tk.END, f"Total Predictions: {summary.get('total_predictions', 'N/A')}\n")
+                        self.forecast_response_text.insert(tk.END, f"Avg Temperature: {summary.get('avg_predicted_temperature', 'N/A')}°C\n")
+                        self.forecast_response_text.insert(tk.END, f"Temperature Range: {summary.get('min_predicted_temperature', 'N/A')}°C - {summary.get('max_predicted_temperature', 'N/A')}°C\n")
+                        self.forecast_response_text.insert(tk.END, f"Model Type: {summary.get('model_type', 'N/A')}\n")
+                    
+                    self.forecast_response_text.insert(tk.END, "\n" + "=" * 50 + "\n")
+                    self.forecast_response_text.insert(tk.END, "📋 Full JSON Response:\n")
+                    self.forecast_response_text.insert(tk.END, "=" * 50 + "\n")
+                    
+                    # Pretty print full JSON
+                    import json
+                    formatted_json = json.dumps(json_response, indent=2, ensure_ascii=False)
+                    self.forecast_response_text.insert(tk.END, formatted_json)
+                    
+                    # Update status
+                    self.forecast_status_var.set(f"✅ Forecast completed - {datetime.now().strftime('%H:%M:%S')}")
+                    
+                except Exception as e:
+                    self.forecast_response_text.insert(tk.END, f"❌ Error parsing JSON response: {str(e)}\n")
+                    self.forecast_response_text.insert(tk.END, f"Raw response: {response.text}\n")
+                    self.forecast_status_var.set("Error parsing response")
+            else:
+                # Error response
+                self.forecast_response_text.insert(tk.END, f"❌ Error Response (Status {response.status_code})\n")
+                try:
+                    error_json = response.json()
+                    self.forecast_response_text.insert(tk.END, json.dumps(error_json, indent=2))
+                except:
+                    self.forecast_response_text.insert(tk.END, response.text)
+                
+                self.forecast_status_var.set(f"❌ Error {response.status_code} - {datetime.now().strftime('%H:%M:%S')}")
+                
+        except Exception as e:
+            self.forecast_response_text.insert(tk.END, f"❌ Error processing response: {str(e)}")
+            self.forecast_status_var.set("Error processing response")
+    
+    def test_forecast_connection(self):
+        """Test connection to the forecast service"""
+        service_url = self.forecast_url_var.get().rstrip('/')
+        
+        if not service_url:
+            messagebox.showerror("URL Required", "Please enter a service URL first.")
+            return
+        
+        # Clear response area
+        self.forecast_response_text.delete(1.0, tk.END)
+        self.forecast_response_text.insert(tk.END, f"🔍 Testing Connection\n")
+        self.forecast_response_text.insert(tk.END, "=" * 30 + "\n")
+        self.forecast_response_text.insert(tk.END, f"📍 URL: {service_url}/health\n")
+        self.forecast_response_text.insert(tk.END, f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        self.forecast_response_text.insert(tk.END, "🔄 Testing...\n")
+        self.forecast_response_text.insert(tk.END, "-" * 30 + "\n\n")
+        
+        # Update status
+        self.forecast_status_var.set("🔄 Testing connection...")
+        
+        # Launch test in background thread
+        thread = threading.Thread(target=self._test_forecast_connection_thread, args=(service_url,))
+        thread.daemon = True
+        thread.start()
+        
+    def _test_forecast_connection_thread(self, service_url):
+        """Test forecast connection in background thread"""
+        try:
+            # Test health endpoint
+            health_url = f"{service_url}/health"
+            response = requests.get(health_url, timeout=10)
+            
+            if response.status_code == 200:
+                try:
+                    health_data = response.json()
+                    self.root.after(0, self._show_forecast_connection_success, health_data)
+                except:
+                    self.root.after(0, self._show_forecast_connection_success, {"status": "healthy"})
+            else:
+                self.root.after(0, self._show_forecast_error, "Connection Test Failed", 
+                              f"Health check failed with status {response.status_code}")
+                
+        except requests.exceptions.ConnectionError:
+            self.root.after(0, self._show_forecast_error, "Connection Error", 
+                          "Could not connect to the service. Make sure it's running on the specified URL.")
+        except requests.exceptions.Timeout:
+            self.root.after(0, self._show_forecast_error, "Timeout Error", 
+                          "Connection test timed out after 10 seconds.")
+        except Exception as e:
+            self.root.after(0, self._show_forecast_error, "Error", f"An error occurred: {str(e)}")
+    
+    def _show_forecast_connection_success(self, health_data):
+        """Show successful connection test results"""
+        self.forecast_response_text.insert(tk.END, f"✅ Connection Successful!\n")
+        self.forecast_response_text.insert(tk.END, f"Service Status: {health_data.get('status', 'healthy')}\n")
+        if 'service' in health_data:
+            self.forecast_response_text.insert(tk.END, f"Service Name: {health_data['service']}\n")
+        if 'timestamp' in health_data:
+            self.forecast_response_text.insert(tk.END, f"Server Time: {health_data['timestamp']}\n")
+        
+        self.forecast_response_text.insert(tk.END, "\n🎯 Forecast endpoint is ready for testing!\n")
+        self.forecast_status_var.set("✅ Connection successful - Ready to forecast")
+    
+    def _show_forecast_error(self, title, message):
+        """Show forecast error message"""
+        messagebox.showerror(title, message)
+        self.forecast_status_var.set("❌ Error")
+        self.forecast_response_text.insert(tk.END, f"❌ Error: {message}\n")
+    
+    def clear_forecast_results(self):
+        """Clear the forecast results area"""
+        self.forecast_response_text.delete(1.0, tk.END)
+        self.forecast_status_var.set("Ready - Enter granary name and silo ID to generate forecasts")
+
+    # ------------------------------------------------------------------
     # AUTOMATED DATA RETRIEVAL HELPERS
     # ------------------------------------------------------------------
 
@@ -2304,7 +2650,7 @@ class SiloFlowTester:
         """Test remote endpoint in background thread"""
         try:
             # GET endpoints that don't require files
-            if endpoint in ["/health", "/models", "/forecast"]:
+            if endpoint in ["/health", "/models"]:
                 response = requests.get(f"{remote_url}{endpoint}", timeout=30)
             # POST endpoints - test without file to see if endpoint exists
             elif endpoint in ["/sort", "/process", "/pipeline"]:
@@ -2414,7 +2760,7 @@ class SiloFlowTester:
     
     def _run_remote_test_suite_thread(self, remote_url):
         """Run remote test suite in background thread"""
-        endpoints = ["/health", "/models", "/sort", "/process", "/train", "/forecast", "/pipeline"]
+        endpoints = ["/health", "/models", "/sort", "/process", "/train", "/pipeline"]
         results = {}
         
         for endpoint in endpoints:
@@ -2422,7 +2768,7 @@ class SiloFlowTester:
             
             try:
                 # GET endpoints that don't require files
-                if endpoint in ["/health", "/models", "/forecast"]:
+                if endpoint in ["/health", "/models"]:
                     response = requests.get(f"{remote_url}{endpoint}", timeout=30)
                 # POST endpoints that require files - we can't test these without data
                 elif endpoint in ["/sort", "/process", "/pipeline"]:
@@ -2483,13 +2829,13 @@ ENDPOINT STATUS:
 - /pipeline: Full pipeline processing
 - /process: Data ingestion and preprocessing
 - /train: Model training endpoint
-- /forecast: Forecasting endpoint
 
 USAGE INSTRUCTIONS:
 1. Test connection first using the "Test Connection" button
 2. Use individual endpoint tests for specific functionality
 3. Run full test suite for comprehensive testing
 4. Send data files using the file upload functionality
+    Note: For forecast testing, use the dedicated "🔮 Forecast Testing" tab
 
 NETWORK REQUIREMENTS:
 - Ensure firewall allows connections to port 8000
@@ -4649,7 +4995,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
         """Ensure data is processed for training/forecasting, using streaming if needed"""
         try:
             granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
-            processed_dir = Path(__file__).parent.parent / "data" / "processed"
+            processed_dir = Path(__file__).parent.parent.parent / "data" / "processed"
             processed_dir.mkdir(parents=True, exist_ok=True)
             
             processed_file = processed_dir / f"{granary_name}_processed.parquet"
@@ -5788,7 +6134,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
             
             # Create the processed directory in the standard location expected by train/forecast
-            processed_dir = Path(__file__).parent.parent / "data" / "processed"
+            processed_dir = Path(__file__).parent.parent.parent / "data" / "processed"
             processed_dir.mkdir(parents=True, exist_ok=True)
             
             # Save in the standard location for train/forecast to find
@@ -5969,7 +6315,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 f"         ℹ️ Model will be saved to: {expected_model_path}\n")
             
             # Check if there's a processed file
-            processed_dir = Path(__file__).parent.parent / "data" / "processed"
+            processed_dir = Path(__file__).parent.parent.parent / "data" / "processed"
             has_processed_file = False
             if processed_dir.exists():
                 parquet_files = list(processed_dir.glob(f"*{granary_name}*.parquet"))
@@ -6076,7 +6422,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                     f"         ℹ️ Expected model file: {model_path}\n")
             
             # Create forecasts directory if it doesn't exist
-            forecasts_dir = Path(__file__).parent.parent / "data" / "forecasts"
+            forecasts_dir = Path(__file__).parent.parent.parent / "data" / "forecasts"
             forecasts_dir.mkdir(parents=True, exist_ok=True)
             
             # Log where forecasts will be saved

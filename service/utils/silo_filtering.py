@@ -19,7 +19,7 @@ def get_simple_retrieval_directory() -> Optional[Path]:
         Path("data/simple_retrieval"),
         Path("service/data/simple_retrieval"), 
         Path("../service/data/simple_retrieval"),
-        Path(__file__).parent.parent / "data" / "simple_retrieval"
+        Path(__file__).parent.parent.parent / "data" / "simple_retrieval"
     ]
     
     for path in possible_paths:

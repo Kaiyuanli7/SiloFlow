@@ -22,8 +22,64 @@ The service will be available at:
 
 ## 📋 API Endpoints
 
-### POST `/forecast`
-**Main production endpoint** - Processes raw CSV and returns forecasts for all granaries.
+### GET `/forecast`
+**Silo-specific forecasting endpoint** - Generates forecasts for a specific silo within a granary.
+
+**Parameters:**
+- `granary_name` (required): Name or ID of the granary
+- `silo_id` (required): ID of the silo within the granary  
+- `horizon_days` (optional): Number of days to forecast (default: 7, max: 30)
+
+**Example:**
+```bash
+curl -X GET "http://localhost:8000/forecast?granary_name=中正粮食储备库&silo_id=H1&horizon_days=7"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "timestamp": "2025-01-15T14:30:22",
+  "granary_name": "中正粮食储备库",
+  "silo_id": "H1",
+  "horizon_days": 7,
+  "latest_data_date": "2025-01-14T23:00:00",
+  "sensors_used": 15,
+  "forecasts": [
+    {
+      "granary_id": "中正粮食储备库",
+      "silo_id": "H1",
+      "forecast_date": "2025-01-15",
+      "forecast_horizon": 1,
+      "grid_x": 1,
+      "grid_y": 1,
+      "grid_z": 1,
+      "predicted_temperature_celsius": 22.5,
+      "base_date": "2025-01-14",
+      "sensor_location": "(1,1,1)",
+      "uncertainty_std": 0.8,
+      "confidence_lower_95": 21.1,
+      "confidence_upper_95": 23.9
+    }
+  ],
+  "summary": {
+    "total_predictions": 105,
+    "sensors_forecasted": 15,
+    "avg_predicted_temperature": 22.3,
+    "min_predicted_temperature": 21.8,
+    "max_predicted_temperature": 23.1,
+    "temperature_range": 1.3,
+    "forecast_horizons": [1, 2, 3, 4, 5, 6, 7],
+    "model_type": "MultiLGBMRegressor"
+  }
+}
+```
+
+### GET `/forecast/all`
+**Legacy endpoint** - Previously generated forecasts for all granaries (now deprecated).
+
+### POST `/pipeline`
+**Full pipeline endpoint** - Processes raw CSV and returns forecasts for all granaries.
 
 **Request:**
 - `file`: Raw CSV file with data from multiple granaries
