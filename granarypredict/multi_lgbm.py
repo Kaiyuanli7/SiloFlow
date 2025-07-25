@@ -457,7 +457,7 @@ def detect_gpu_availability() -> dict:
         'device': 'cpu',
         'gpu_platform_id': 0,
         'gpu_device_id': 0,
-        'gpu_use_dp': True,
+        'gpu_use_dp': False,  # Use single precision by default for compatibility
         'available': False
     }
     
@@ -543,26 +543,110 @@ def detect_gpu_availability() -> dict:
         })
         y_test = np.random.randn(100)
         
-        # Try to train a small model with GPU
-        test_model = LGBMRegressor(
-            n_estimators=5,
-            device='gpu',
-            gpu_platform_id=0,
-            gpu_device_id=0,
-            force_col_wise=True,  # Force GPU usage
-            gpu_use_dp=False  # Use single precision for faster test
-        )
+        # Try to find the best GPU platform and device
+        best_platform = 0
+        best_device = 0
+        gpu_working = False
         
-        # Try to fit the model
-        test_model.fit(X_test, y_test)
+        # Try different platform/device combinations to find NVIDIA GPU
+        test_combinations = [
+            (0, 0), (0, 1), (0, 2),  # Platform 0: devices 0, 1, 2
+            (1, 0), (1, 1), (1, 2),  # Platform 1: devices 0, 1, 2
+            (2, 0), (2, 1), (2, 2),  # Platform 2: devices 0, 1, 2
+        ]
         
-        # If we get here, GPU is working
-        gpu_config.update({
-            'device': 'gpu',
-            'available': True
-        })
+        print(f"🔍 GPU DETECTION: Testing {len(test_combinations)} OpenCL platform/device combinations...")
+        print(f"🎯 GOAL: Find the combination that uses NVIDIA RTX 3060 (not Intel UHD Graphics)")
         
-        print("GPU ACCELERATION: LightGBM GPU support detected and verified - GPU acceleration available")
+        working_combinations = []  # Store all working combinations
+        nvidia_combination = None  # Store the NVIDIA GPU combination
+        
+        for platform_id, device_id in test_combinations:
+            try:
+                print(f"   🔍 Testing platform {platform_id}, device {device_id}...")
+                
+                # Capture LightGBM output to detect which GPU is used
+                import io
+                import sys
+                from contextlib import redirect_stdout, redirect_stderr
+                
+                output_buffer = io.StringIO()
+                
+                test_model = LGBMRegressor(
+                    n_estimators=5,
+                    device='gpu',
+                    gpu_platform_id=platform_id,
+                    gpu_device_id=device_id,
+                    force_col_wise=True,
+                    gpu_use_dp=False,  # Use single precision for RTX 3060 compatibility
+                    verbose=1  # Show LightGBM output to see which GPU device is being used
+                )
+                
+                # Try to fit the model - LightGBM will output which GPU device it's using
+                with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
+                    test_model.fit(X_test, y_test)
+                
+                # Get the captured output
+                lgb_output = output_buffer.getvalue()
+                
+                # If we get here, this platform/device works
+                working_combinations.append((platform_id, device_id))
+                
+                # Check if this combination uses NVIDIA GPU
+                if "NVIDIA" in lgb_output and "GeForce RTX 3060" in lgb_output:
+                    nvidia_combination = (platform_id, device_id)
+                    print(f"      🎯 NVIDIA RTX 3060 FOUND! Platform {platform_id}, Device {device_id}")
+                    print(f"      � This is the combination we want for training!")
+                elif "Intel" in lgb_output:
+                    print(f"      ⚠️  Intel GPU: Platform {platform_id}, Device {device_id}")
+                else:
+                    print(f"      ✅ SUCCESS: Platform {platform_id}, Device {device_id} works")
+                
+                # Show key parts of LightGBM output
+                for line in lgb_output.split('\n'):
+                    if "Using GPU Device:" in line:
+                        print(f"      📝 {line.strip()}")
+                        break
+                    
+            except Exception as e:
+                error_msg = str(e)
+                if "No OpenCL" in error_msg or "platform" in error_msg.lower():
+                    print(f"      ❌ Platform {platform_id}, Device {device_id}: Not available")
+                elif "Build Program Failure" in error_msg:
+                    print(f"      ❌ Platform {platform_id}, Device {device_id}: OpenCL build failed")
+                else:
+                    print(f"      ❌ Platform {platform_id}, Device {device_id}: {error_msg[:60]}...")
+                continue
+        
+        # Choose the best working combination - PRIORITIZE NVIDIA GPU
+        if nvidia_combination:
+            best_platform, best_device = nvidia_combination
+            gpu_working = True
+            
+            print(f"\n🎯 FINAL CHOICE: Using Platform {best_platform}, Device {best_device}")
+            print(f"   🎮 NVIDIA RTX 3060 SELECTED! This will use your discrete GPU")
+            print(f"   📊 Found {len(working_combinations)} working combinations: {working_combinations}")
+            print(f"   ✅ Prioritized NVIDIA GPU over Intel integrated graphics")
+        elif working_combinations:
+            # Fallback to last working combination if no NVIDIA found
+            best_platform, best_device = working_combinations[-1]
+            gpu_working = True
+            
+            print(f"\n⚠️  FALLBACK CHOICE: Using Platform {best_platform}, Device {best_device}")
+            print(f"   📊 Found {len(working_combinations)} working combinations: {working_combinations}")
+            print(f"   💡 No NVIDIA GPU detected in OpenCL output - using last working combination")
+        else:
+            print(f"\n❌ No working OpenCL combinations found")
+        
+        if gpu_working:
+            # Update config with working platform/device
+            gpu_config.update({
+                'device': 'gpu',
+                'gpu_platform_id': best_platform,
+                'gpu_device_id': best_device,
+                'available': True
+            })
+            print("GPU ACCELERATION: LightGBM GPU support detected and verified - GPU acceleration available")
         
     except Exception as e:
         error_msg = str(e).lower()
@@ -575,7 +659,7 @@ def detect_gpu_availability() -> dict:
     return gpu_config
 
 
-def get_optimal_gpu_params(dataset_size: int, feature_count: int, use_gpu: bool = True) -> dict:
+def get_optimal_gpu_params(dataset_size: int, feature_count: int, use_gpu: bool = True, gpu_config: dict = None) -> dict:
     """
     Get optimal GPU parameters based on dataset characteristics.
     
@@ -587,6 +671,8 @@ def get_optimal_gpu_params(dataset_size: int, feature_count: int, use_gpu: bool 
         Number of features
     use_gpu : bool
         Whether to use GPU acceleration
+    gpu_config : dict, optional
+        Pre-detected GPU configuration to avoid repeated detection
         
     Returns:
     --------
@@ -596,33 +682,37 @@ def get_optimal_gpu_params(dataset_size: int, feature_count: int, use_gpu: bool 
     if not use_gpu:
         return {'device': 'cpu'}
     
-    gpu_config = detect_gpu_availability()
+    # Use provided gpu_config or detect if not provided
+    if gpu_config is None:
+        gpu_config = detect_gpu_availability()
     
     if not gpu_config['available']:
         return {'device': 'cpu'}
     
-    # Base GPU parameters
+    # Base GPU parameters - use single precision for better compatibility
     gpu_params = {
         'device': 'gpu',
         'gpu_platform_id': gpu_config['gpu_platform_id'],
         'gpu_device_id': gpu_config['gpu_device_id'],
-        'gpu_use_dp': gpu_config['gpu_use_dp'],
+        'gpu_use_dp': False,  # Force single precision for stability
     }
     
     # Optimize based on dataset size
+    # CRITICAL FIX: Always use single precision (gpu_use_dp=False) for RTX 3060 compatibility
+    # Double precision causes OpenCL build failures on consumer GPUs
     if dataset_size > 100000:  # Large dataset
         gpu_params.update({
-            'gpu_use_dp': False,  # Use single precision for speed
+            'gpu_use_dp': False,  # Use single precision for speed and compatibility
             'max_bin': 255,  # Smaller bins for GPU efficiency
         })
     elif dataset_size > 50000:  # Medium dataset
         gpu_params.update({
-            'gpu_use_dp': True,  # Use double precision for accuracy
+            'gpu_use_dp': False,  # Use single precision for compatibility
             'max_bin': 511,  # Balanced bin size
         })
     else:  # Small dataset
         gpu_params.update({
-            'gpu_use_dp': True,  # Use double precision for accuracy
+            'gpu_use_dp': False,  # FIXED: Use single precision even for small datasets
             'max_bin': 511,  # Larger bins for better precision
         })
     
@@ -879,27 +969,34 @@ class MultiLGBMRegressor:
                 feature_count = len(X.columns) if hasattr(X, 'columns') else X.shape[1]
                 
                 # Get optimal GPU parameters based on dataset characteristics
+                # PERFORMANCE FIX: Pass cached gpu_config to avoid repeated detection
                 if self.gpu_optimization:
-                    gpu_params = get_optimal_gpu_params(dataset_size, feature_count, use_gpu=True)
+                    gpu_params = get_optimal_gpu_params(dataset_size, feature_count, use_gpu=True, gpu_config=self.gpu_config)
                     params.update(gpu_params)
                     
                     if verbose and idx == 0:  # Log GPU settings for first horizon only
-                        print(f"GPU ACCELERATION: Device={gpu_params.get('device', 'cpu')}")
-                        print(f"   Platform ID: {gpu_params.get('gpu_platform_id', 0)}")
-                        print(f"   Device ID: {gpu_params.get('gpu_device_id', 0)}")
-                        print(f"   Double Precision: {gpu_params.get('gpu_use_dp', True)}")
-                        print(f"   Max Bins: {gpu_params.get('max_bin', 255)}")
+                        print(f"🎮 GPU ACCELERATION: Device={gpu_params.get('device', 'cpu')}")
+                        print(f"   🔧 Platform ID: {gpu_params.get('gpu_platform_id', 0)}")
+                        print(f"   🔧 Device ID: {gpu_params.get('gpu_device_id', 0)}")
+                        print(f"   🔧 Double Precision: {gpu_params.get('gpu_use_dp', True)}")
+                        print(f"   🔧 Max Bins: {gpu_params.get('max_bin', 255)}")
+                        print(f"   🚀 LightGBM will use GPU for training acceleration!")
                 else:
-                    # Use basic GPU settings
+                    # Use basic GPU settings with single precision for compatibility
                     params.update({
                         'device': 'gpu',
                         'gpu_platform_id': self.gpu_config['gpu_platform_id'],
                         'gpu_device_id': self.gpu_config['gpu_device_id'],
-                        'gpu_use_dp': self.gpu_config['gpu_use_dp'],
+                        'gpu_use_dp': False,  # Force single precision for stability
                     })
                     
                     if verbose and idx == 0:
-                        print(f"GPU ACCELERATION: Basic settings applied")
+                        print(f"🎮 GPU ACCELERATION: Basic settings applied")
+                        print(f"   🔧 Device: gpu")
+                        print(f"   🔧 Platform ID: {self.gpu_config['gpu_platform_id']}")
+                        print(f"   🔧 Device ID: {self.gpu_config['gpu_device_id']}")
+                        print(f"   � Single Precision: Enabled (gpu_use_dp=False)")
+                        print(f"   �🚀 LightGBM will use GPU for training acceleration!")
             else:
                 # CPU fallback
                 params['device'] = 'cpu'
