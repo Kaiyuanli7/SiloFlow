@@ -204,22 +204,52 @@ class AutomatedGranaryProcessor:
     async def process_raw_csv(self, csv_path: str) -> Dict:
         """Simplified ingestion for basic data processing"""
         try:
+            logger.info(f"[INGESTION-START] Starting raw CSV ingestion: {csv_path}")
+            
             from granarypredict import ingestion
-            logger.info(f"Ingesting raw CSV: {csv_path}")
+            
+            # Check if file exists
+            if not Path(csv_path).exists():
+                logger.error(f"[INGESTION-ERROR] File not found: {csv_path}")
+                return {'granaries': [], 'silo_changes': {}}
+            
+            file_size = Path(csv_path).stat().st_size
+            logger.info(f"[INGESTION-FILE] File size: {file_size / (1024*1024):.2f} MB")
             
             # Simple ingestion without complex filtering
-            def ingestion_operation():
-                return ingestion.ingest_and_sort(csv_path)
+            logger.info(f"[INGESTION-CALL] Calling ingestion.ingest_and_sort with detailed status...")
             
-            granary_status = self._safe_file_operation(ingestion_operation)
+            def ingestion_operation():
+                return ingestion.ingest_and_sort(csv_path, return_new_data_status=True)
+            
+            result = self._safe_file_operation(ingestion_operation)
+            
+            logger.info(f"[INGESTION-RESULT] Raw result type: {type(result)}")
+            logger.info(f"[INGESTION-RESULT] Raw result: {result}")
+            
+            # Extract granary status from the detailed result
+            if isinstance(result, dict) and 'granary_status' in result:
+                granary_status = result['granary_status']
+                silo_changes = result.get('silo_changes', {})
+                logger.info(f"[INGESTION-DETAILED] Found detailed status format")
+            else:
+                # Fallback for old format
+                granary_status = result if isinstance(result, dict) else {}
+                silo_changes = {}
+                logger.warning(f"[INGESTION-FALLBACK] Using fallback format conversion")
             
             # Convert to simple format
             if isinstance(granary_status, dict):
                 granaries_with_new_data = [name for name, is_new in granary_status.items() if is_new]
+                logger.info(f"[INGESTION-CONVERSION] Converted to granary list: {granaries_with_new_data}")
+                logger.info(f"[INGESTION-DETAIL] Granary status details:")
+                for name, is_new in granary_status.items():
+                    logger.info(f"[INGESTION-DETAIL]   {name}: {'NEW' if is_new else 'EXISTING'}")
             else:
                 granaries_with_new_data = []
+                logger.warning(f"[INGESTION-WARN] Unexpected result format, using empty list")
             
-            logger.info(f"Granaries processed: {granaries_with_new_data}")
+            logger.info(f"[INGESTION-SUCCESS] Granaries with new data: {granaries_with_new_data}")
             
             return {
                 'granaries': granaries_with_new_data,
@@ -227,9 +257,9 @@ class AutomatedGranaryProcessor:
             }
             
         except Exception as e:
-            logger.error(f"Error ingesting CSV: {e}")
+            logger.error(f"[INGESTION-ERROR] Error ingesting CSV: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"[INGESTION-ERROR] Full traceback: {traceback.format_exc()}")
             raise
     
     async def process_granary(self, granary_name: str, changed_silos: Optional[List[str]] = None) -> Dict:
@@ -319,7 +349,7 @@ class AutomatedGranaryProcessor:
                     
                 results[granary] = {
                     "processing": process_result,
-                    "forecasts": None  # Simplified - no forecasting
+                    "forecasts": self._extract_forecast_data(granary, process_result)
                 }
                 
                 # Force cleanup after each granary
@@ -342,6 +372,37 @@ class AutomatedGranaryProcessor:
                 'granaries_processed': 0,
                 'forecasts': {}
             }
+    
+    def _extract_forecast_data(self, granary_name: str, process_result: Dict) -> Dict:
+        """Extract forecast data from processing results."""
+        try:
+            if not process_result.get("success", False):
+                return {}
+            
+            # Look for forecast file
+            forecasts_dir = self.forecasts_dir
+            forecast_file = forecasts_dir / f"{granary_name}_forecast.csv"
+            
+            if forecast_file.exists():
+                with open(forecast_file, 'r', encoding='utf-8') as f:
+                    csv_content = f.read()
+                
+                # Count records (excluding header)
+                total_records = len(csv_content.strip().split('\n')) - 1 if csv_content else 0
+                
+                return {
+                    "csv_content": csv_content,
+                    "total_records": total_records,
+                    "csv_filename": f"{granary_name}_forecast.csv",
+                    "summary": process_result.get("summary", {"method": "standard_pipeline"})
+                }
+            else:
+                logger.warning(f"No forecast file found for granary {granary_name}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"Error extracting forecast data for {granary_name}: {e}")
+            return {}
     
     def cleanup_temp_files(self, temp_path: str):
         """Clean up temporary files with enhanced error handling"""

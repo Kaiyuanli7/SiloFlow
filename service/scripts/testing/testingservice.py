@@ -4630,6 +4630,89 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 f"      ❌ Error ensuring processed data: {e}\n")
             return None
     
+    def _stream_training(self, processed_file, granary_name):
+        """Train model using processed data with massive dataset support and aggressive memory management"""
+        try:
+            from granarypredict.streaming_processor import create_massive_training_pipeline
+            import gc
+            import psutil
+            
+            # Memory monitoring
+            initial_memory = psutil.virtual_memory().percent
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      🧠 Initial memory usage: {initial_memory:.1f}%\n")
+            
+            # Use the new massive training pipeline
+            models_dir = Path(__file__).parent.parent.parent / "data" / "models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            
+            model_output_path = models_dir / f"{granary_name}_massive_model.joblib"
+            
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      🤖 Training massive dataset model for {granary_name}...\n")
+            
+            # Get training options
+            use_gpu = self.batch_gpu_var.get()
+            
+            # Aggressive memory cleanup before training
+            gc.collect()
+            
+            # Train using the massive training pipeline with conservative settings
+            training_result = create_massive_training_pipeline(
+                train_data_path=processed_file,
+                target_column="temperature_grain",
+                model_output_path=model_output_path,
+                chunk_size=25_000,  # Smaller chunks to reduce memory usage
+                backend="pandas",   # Use pandas backend for better memory control
+                horizons=(1, 2, 3, 4, 5, 6, 7),
+                use_gpu=use_gpu
+            )
+            
+            # Aggressive memory cleanup after training
+            gc.collect()
+            
+            # Memory monitoring after training
+            final_memory = psutil.virtual_memory().percent
+            memory_increase = final_memory - initial_memory
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      🧠 Final memory usage: {final_memory:.1f}% (Δ{memory_increase:+.1f}%)\n")
+            
+            if training_result['success']:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ✅ Massive model training completed for {granary_name}\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      📊 Training stats: {training_result['total_samples']:,} samples, "
+                    f"{training_result['training_time']:.1f}s\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      🎯 Model saved: {training_result['model_path']}\n")
+                
+                # Force garbage collection and memory cleanup
+                del training_result
+                gc.collect()
+                
+                return True
+            else:
+                error_msg = training_result.get('error', 'Unknown error')
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ❌ Massive model training failed: {error_msg}\n")
+                
+                # Clean up failed training result
+                del training_result
+                gc.collect()
+                
+                # Fallback to legacy training with memory monitoring
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      🔄 Falling back to legacy training method...\n")
+                return self._legacy_stream_training(processed_file, granary_name)
+                
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      ❌ Training error: {e}\n")
+            # Force cleanup on error
+            gc.collect()
+            # Fallback to legacy training
+            return self._legacy_stream_training(processed_file, granary_name)
+
     def _legacy_stream_training(self, processed_file, granary_name):
         """Legacy training method as fallback"""
         try:

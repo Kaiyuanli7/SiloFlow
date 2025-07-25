@@ -1,0 +1,78 @@
+{
+  "service": {
+    "name": "SiloFlow Pipeline Service",
+    "version": "2.1.0-optimized",
+    "description": "High-performance grain temperature forecasting service"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "workers": 1,
+    "timeout_keep_alive": 5,
+    "access_log": true,
+    "log_level": "info"
+  },
+  "optimization": {
+    "enable_compression": true,
+    "enable_model_cache": true,
+    "enable_memory_pool": true,
+    "enable_performance_monitoring": true,
+    "max_concurrent_granaries": 4,
+    "max_file_size_mb": 500,
+    "response_timeout_seconds": 10800,
+    "memory_threshold_percent": 75,
+    "cpu_threshold_percent": 80
+  },
+  "processing": {
+    "use_optimized_pipeline": true,
+    "fallback_to_standard": true,
+    "chunk_size": 50000,
+    "max_workers": "auto",
+    "enable_parallel_features": true,
+    "conservative_mode": false
+  },
+  "caching": {
+    "model_cache_size": 10,
+    "parameter_cache_enabled": true,
+    "data_cache_size_mb": 1000,
+    "cache_ttl_hours": 24
+  },
+  "monitoring": {
+    "metrics_history_size": 1000,
+    "monitoring_interval_seconds": 5,
+    "alert_thresholds": {
+      "cpu_percent": 85.0,
+      "memory_percent": 80.0,
+      "error_rate": 5.0,
+      "avg_response_time": 10.0
+    },
+    "alert_cooldown_seconds": 300
+  },
+  "directories": {
+    "models": "models",
+    "data_processed": "data/processed",
+    "data_granaries": "data/granaries",
+    "data_batch": "data/batch",
+    "data_forecasts": "data/forecasts",
+    "temp_uploads": "temp_uploads",
+    "logs_performance": "logs/performance",
+    "cache_models": "cache/models",
+    "cache_data": "cache/data"
+  },
+  "environment": {
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1"
+  },
+  "features": {
+    "streaming_responses": true,
+    "concurrent_processing": true,
+    "smart_resource_scaling": true,
+    "automatic_cleanup": true,
+    "graceful_degradation": true,
+    "request_tracking": true,
+    "performance_headers": true
+  }
+}

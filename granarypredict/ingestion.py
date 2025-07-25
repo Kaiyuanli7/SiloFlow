@@ -122,12 +122,11 @@ def ingest_and_sort(csv_path, return_new_data_status=False):
     If return_new_data_status is True, returns a dict with both granary and silo change information.
     Otherwise, returns a list of granary names.
     """
-    from .ingestion import read_granary_csv
     import pandas as pd
     from pathlib import Path
     import os
     
-    # Use automatic format detection (CSV or Parquet)
+    # Use automatic format detection (CSV or Parquet) - function is defined in this same file
     df = read_granary_csv(csv_path)
     
     # Use the existing standardization function to handle various column formats
