@@ -4637,19 +4637,37 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
             return False
 
     def _stream_training_optimized(self, file_path, processor):
-        """Optimized streaming training for batch operations"""
+        """Optimized training for batch operations - TRAINING ONLY, NO PREPROCESSING"""
         try:
-            granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
+            # Extract granary name from file path
+            if file_path.stem.endswith('_processed'):
+                granary_name = file_path.stem[:-10]  # Remove '_processed' suffix
+            else:
+                granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
             
-            # Ensure processed data exists
-            processed_file = self._ensure_processed_data(file_path, processor)
-            if not processed_file:
+            # TRAINING ONLY: Assume file is already processed, load directly for training
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      🎯 TRAINING-ONLY MODE: Loading processed file directly\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      📁 Input: {file_path.name}\n")
+            
+            # Check if file exists and is a processed parquet file
+            if not file_path.exists():
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ❌ File not found: {file_path}\n")
                 return False
             
-            # Use existing training logic but optimized
-            return self._stream_training(processed_file, granary_name)
+            if file_path.suffix.lower() != '.parquet':
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"      ❌ Expected processed .parquet file, got: {file_path.suffix}\n")
+                return False
             
-        except Exception:
+            # Use training-only logic
+            return self._stream_training_only(file_path, granary_name)
+            
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"      ❌ Error in training-only mode: {e}\n")
             return False
 
     def _stream_forecasting_optimized(self, file_path, processor):
@@ -4744,7 +4762,7 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                         # Standard extraction for non-processed files
                         granary_name = file_path.stem.split('_')[0] if '_' in file_path.stem else file_path.stem
                     
-                    success = self._stream_training(processed_file, granary_name)
+                    success = self._stream_training_only(processed_file, granary_name)
                     
             elif action == "forecasting":
                 # For forecasting, ensure model exists and data is processed
@@ -5032,7 +5050,302 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 f"      ❌ Error ensuring processed data: {e}\n")
             return None
     
-    def _stream_training(self, processed_file, granary_name):
+    def _stream_training_only(self, processed_file, granary_name):
+        """TRAINING-ONLY: Load processed parquet file and train model (NO PREPROCESSING)"""
+        try:
+            import gc
+            import psutil
+            import datetime
+            import pandas as pd
+            from pathlib import Path
+            
+            # ========== TRAINING-ONLY SESSION LOGGING ==========
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"\n🎯 ============ TRAINING-ONLY SESSION STARTED ============\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"📅 Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"🏷️  Granary: {granary_name}\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"📁 Processed Data: {processed_file.name}\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"🎯 Mode: TRAINING-ONLY (No preprocessing, data assumed ready)\n")
+            
+            # Memory check before loading
+            memory_info = psutil.virtual_memory()
+            initial_memory = memory_info.percent
+            available_gb = memory_info.available / (1024**3)
+            
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"\n🧠 PRE-TRAINING MEMORY STATUS:\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"   • Available RAM: {available_gb:.1f} GB\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"   • Memory Usage: {initial_memory:.1f}%\n")
+            
+            # File size check
+            file_size_mb = processed_file.stat().st_size / (1024**2)
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"   • File Size: {file_size_mb:.1f} MB\n")
+            
+            # GPU settings
+            use_gpu = self.batch_gpu_var.get()
+            use_tuning = self.batch_tune_var.get()
+            trials = self.batch_trials_var.get() if use_tuning else 0
+            timeout = self.batch_timeout_var.get() if use_tuning else 0
+            
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"\n⚙️  TRAINING CONFIGURATION:\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"   • GPU Acceleration: {'✅ ENABLED' if use_gpu else '❌ DISABLED'}\n")
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"   • Hyperparameter Tuning: {'✅ ENABLED' if use_tuning else '❌ DISABLED'}\n")
+            if use_tuning:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"     └─ Optuna Trials: {trials}\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"     └─ Timeout: {timeout} seconds\n")
+            
+            # Model output path
+            models_dir = Path(__file__).parent.parent.parent / "models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            model_output_path = models_dir / f"{granary_name}_processed.joblib"
+            
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"   • Model Output: {model_output_path.name}\n")
+            
+            # LOAD PROCESSED DATA DIRECTLY (NO PREPROCESSING)
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"\n📊 LOADING PROCESSED DATA (TRAINING-ONLY MODE):\n")
+            
+            try:
+                # Load data in chunks if file is large to avoid memory issues
+                if file_size_mb > 500:  # If file > 500MB, use chunked loading
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   🔄 Large file detected ({file_size_mb:.1f}MB), using chunked training...\n")
+                    
+                    # Use streaming processor for large files with training-only mode
+                    from granarypredict.streaming_processor import MassiveModelTrainer
+                    
+                    trainer = MassiveModelTrainer(
+                        chunk_size=25_000,  # Conservative chunk size
+                        backend="pandas",
+                        memory_threshold=70.0,
+                        enable_advanced_memory_management=True
+                    )
+                    
+                    # Call simplified training with training-only mode
+                    training_result = trainer.train_massive_lightgbm_simplified(
+                        train_data_path=processed_file,
+                        target_column="temperature_grain",
+                        model_output_path=model_output_path,
+                        horizons=(1, 2, 3, 4, 5, 6, 7),
+                        use_gpu=use_gpu,
+                        future_safe=False,  # REQUIREMENT: Include environmental variables
+                        use_anchor_early_stopping=True,  # REQUIREMENT: Anchor day early stopping
+                        balance_horizons=True,  # REQUIREMENT: Horizon balancing
+                        horizon_strategy="increasing",  # REQUIREMENT: Increasing priority
+                        enable_optuna=use_tuning,  # REQUIREMENT: Optuna optimization
+                        optuna_trials=trials if use_tuning else 50,
+                        optuna_timeout=timeout if use_tuning else 1800,
+                        conservative_mode=True,  # REQUIREMENT: Memory conservation
+                        stability_feature_boost=2.0,  # REQUIREMENT: Stability boost
+                        uncertainty_estimation=True,  # REQUIREMENT: Uncertainty quantification
+                        n_bootstrap_samples=15,  # REQUIREMENT: Bootstrap samples
+                        assume_preprocessed=True  # KEY: Tell trainer data is already processed
+                    )
+                    
+                else:
+                    # For smaller files, load entire dataset into memory
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   📥 Loading entire dataset into memory ({file_size_mb:.1f}MB)...\n")
+                    
+                    # Load processed parquet file directly
+                    df = pd.read_parquet(processed_file)
+                    rows, cols = df.shape
+                    
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   ✅ Data loaded: {rows:,} rows × {cols:,} columns\n")
+                    
+                    # Verify required columns exist
+                    if "temperature_grain" not in df.columns:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   ❌ Target column 'temperature_grain' not found in processed data\n")
+                        return False
+                    
+                    # Quick data verification
+                    non_null_targets = df["temperature_grain"].notna().sum()
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   📊 Valid targets: {non_null_targets:,} / {rows:,} ({non_null_targets/rows*100:.1f}%)\n")
+                    
+                    if non_null_targets < 1000:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   ⚠️ Warning: Very few valid targets for training\n")
+                    
+                    # Use in-memory training for smaller datasets
+                    from granarypredict.multi_lgbm import MultiLGBMRegressor
+                    from granarypredict.features import select_feature_target_multi
+                    
+                    # Extract features and targets from processed data
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   🔧 Extracting features and targets...\n")
+                    
+                    X, y = select_feature_target_multi(
+                        df,
+                        target_col="temperature_grain",
+                        horizons=(1, 2, 3, 4, 5, 6, 7),
+                        allow_na=False  # Only complete training samples
+                    )
+                    
+                    if X is None or y is None:
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   ❌ Feature/target extraction failed\n")
+                        return False
+                    
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   ✅ Features: {X.shape}, Targets: {y.shape if hasattr(y, 'shape') else len(y)}\n")
+                    
+                    # Initialize and train model with Dashboard.py-equivalent parameters
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"\n🚀 STARTING IN-MEMORY TRAINING (Dashboard.py-equivalent)...\n")
+                    
+                    # Use optimized parameters matching Dashboard.py defaults
+                    model = MultiLGBMRegressor(
+                        base_params={
+                            # Optimized parameters from Dashboard.py
+                            'learning_rate': 0.07172794499286328,  # Optimal parameter
+                            'max_depth': 20,                       # Optimal parameter
+                            'num_leaves': 133,                     # Optimal parameter
+                            'subsample': 0.8901667731353657,       # Optimal parameter
+                            'colsample_bytree': 0.7729605909501445, # Optimal parameter
+                            'min_child_samples': 102,              # Optimal parameter
+                            'lambda_l1': 1.4182488012070926,       # Optimal parameter
+                            'lambda_l2': 1.7110926238653472,       # Optimal parameter
+                            'max_bin': 416,                        # Optimal parameter
+                            'n_estimators': 1000,
+                            'verbosity': -1,
+                            'random_state': 42,
+                            # Compression optimizations from Dashboard.py
+                            'compress': True,
+                            'compression_level': 6,
+                            'save_binary': True,
+                            'device': 'gpu' if use_gpu else 'cpu'
+                        },
+                        early_stopping_rounds=50,  # Anchor day optimized early stopping
+                        uncertainty_estimation=True,  # Uncertainty quantification
+                        n_bootstrap_samples=25,  # Match Dashboard.py (was 15)
+                        directional_feature_boost=2.0,  # 2x boost for directional features (was missing)
+                        conservative_mode=True,  # Memory conservation
+                        stability_feature_boost=3.0,  # 3x boost (was 2.0)
+                        use_gpu=use_gpu,
+                        gpu_optimization=True if use_gpu else False  # Auto-optimization (was missing)
+                    )
+                    
+                    # Create a validation split for proper early stopping (like Dashboard.py)
+                    from sklearn.model_selection import train_test_split
+                    X_train, X_val, y_train, y_val = train_test_split(
+                        X, y, test_size=0.05, random_state=42, shuffle=False  # Chronological split
+                    )
+                    
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   📊 Training split: {len(X_train):,} train, {len(X_val):,} validation\n")
+                    
+                    # Train the model with Dashboard.py-equivalent process
+                    import time
+                    start_time = time.time()
+                    
+                    # Create validation dataframe for anchor-day methodology  
+                    val_indices = X_val.index
+                    anchor_df = df.loc[val_indices].copy() if len(val_indices) > 0 else None
+                    
+                    # Train with advanced features like Dashboard.py
+                    if anchor_df is not None and len(anchor_df) > 0:
+                        model.fit(
+                            X_train, y_train,
+                            eval_set=(X_val, y_val),  # Validation for early stopping
+                            verbose=False,
+                            anchor_df=anchor_df,  # Anchor-day methodology
+                            horizon_tuple=(1, 2, 3, 4, 5, 6, 7),  # Multi-horizon support
+                            use_anchor_early_stopping=True,  # Advanced early stopping
+                            balance_horizons=True,  # Horizon balancing
+                            horizon_strategy="equal"  # Equal horizon weighting
+                        )
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   ✅ Advanced training with anchor-day early stopping\n")
+                    else:
+                        # Fallback to basic training if validation split fails
+                        model.fit(X, y)
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   ⚠️ Basic training (no validation split available)\n")
+                    
+                    training_time = time.time() - start_time
+                    
+                    # Save model
+                    from granarypredict.model import save_model
+                    save_result = save_model(model, str(model_output_path))
+                    
+                    # Create training result
+                    training_result = {
+                        'success': True,
+                        'total_samples': len(X),
+                        'training_time': training_time,
+                        'model_path': str(model_output_path),
+                        'approach': 'in_memory_training_only',
+                        'final_n_estimators': getattr(model, 'n_estimators_', 1000)
+                    }
+                
+                # Memory cleanup
+                gc.collect()
+                
+                # Final memory check
+                final_memory_info = psutil.virtual_memory()
+                final_memory = final_memory_info.percent
+                memory_increase = final_memory - initial_memory
+                
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"\n📈 TRAINING-ONLY RESULTS:\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"   • Final Memory Usage: {final_memory:.1f}% (Δ{memory_increase:+.1f}%)\n")
+                
+                if training_result and training_result.get('success'):
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   • Status: ✅ SUCCESS\n")
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   • Training Samples: {training_result['total_samples']:,}\n")
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   • Training Time: {training_result['training_time']:.1f} seconds\n")
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   • Model Saved: {Path(training_result['model_path']).name}\n")
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   • Approach: {training_result['approach']}\n")
+                    
+                    if use_gpu:
+                        training_speed = training_result['total_samples'] / training_result['training_time'] if training_result['training_time'] > 0 else 0
+                        self.root.after(0, self.batch_log_text.insert, tk.END, 
+                            f"   • 🎮 GPU Training Speed: {training_speed:,.0f} samples/second\n")
+                    
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"\n🎉 ============ TRAINING-ONLY COMPLETED SUCCESSFULLY ============\n\n")
+                    
+                    return True
+                else:
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"   • Status: ❌ FAILED\n")
+                    self.root.after(0, self.batch_log_text.insert, tk.END, 
+                        f"\n💥 ============ TRAINING-ONLY FAILED ============\n\n")
+                    return False
+                    
+            except Exception as training_error:
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"❌ Training error: {training_error}\n")
+                self.root.after(0, self.batch_log_text.insert, tk.END, 
+                    f"🚨 ============ TRAINING-ONLY SESSION CRASHED ============\n\n")
+                return False
+                
+        except Exception as e:
+            self.root.after(0, self.batch_log_text.insert, tk.END, 
+                f"💥 Training-only session crashed: {e}\n")
+            return False
         """Train model using processed data with comprehensive startup logging and parameter details"""
         try:
             from granarypredict.streaming_processor import create_massive_training_pipeline
@@ -5297,7 +5610,14 @@ print(json.dumps(silo_data, ensure_ascii=False, indent=2))
                 chunk_size=25_000,  # Smaller chunks to reduce memory usage
                 backend="pandas",   # Use pandas backend for better memory control
                 horizons=(1, 2, 3, 4, 5, 6, 7),
-                use_gpu=final_gpu_usage
+                use_gpu=final_gpu_usage,
+                future_safe=False,  # REQUIREMENT: Include environmental variables
+                use_anchor_early_stopping=True,  # REQUIREMENT: Anchor day early stopping
+                balance_horizons=True,  # REQUIREMENT: Horizon balancing
+                horizon_strategy="increasing",  # REQUIREMENT: Increasing priority
+                enable_optuna=use_tuning,  # REQUIREMENT: Optuna optimization
+                use_simplified_approach=True,  # Use simplified single-phase approach
+                assume_preprocessed=True  # KEY: Data is already processed, TRAINING-ONLY
             )
             
             # Aggressive memory cleanup after training
