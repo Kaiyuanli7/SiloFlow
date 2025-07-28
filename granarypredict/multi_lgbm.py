@@ -593,7 +593,7 @@ def detect_gpu_availability() -> dict:
                 working_combinations.append((platform_id, device_id))
                 
                 # Check if this combination uses NVIDIA GPU
-                if "NVIDIA" in lgb_output and "GeForce RTX 3060" in lgb_output:
+                if "NVIDIA" in lgb_output:
                     nvidia_combination = (platform_id, device_id)
                     print(f"      🎯 NVIDIA RTX 3060 FOUND! Platform {platform_id}, Device {device_id}")
                     print(f"      � This is the combination we want for training!")
@@ -619,6 +619,9 @@ def detect_gpu_availability() -> dict:
                 continue
         
         # Choose the best working combination - PRIORITIZE NVIDIA GPU
+        print(f"\n🔍 DEBUG: nvidia_combination = {nvidia_combination}")
+        print(f"🔍 DEBUG: working_combinations = {working_combinations}")
+        
         if nvidia_combination:
             best_platform, best_device = nvidia_combination
             gpu_working = True
