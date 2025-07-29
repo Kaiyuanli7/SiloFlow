@@ -7,17 +7,19 @@ OPTIMIZED VERSION with async support, connection pooling, and performance enhanc
 
 from __future__ import annotations
 
+
 import asyncio
 import logging
 import multiprocessing
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-
+import pandas as pd
 # Configure logging early ----------------------------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -48,6 +50,112 @@ async def lifespan(app: FastAPI):
     performance_monitor = get_performance_monitor()
     monitoring_task = asyncio.create_task(performance_monitor.start_monitoring())
     logger.info("[PERF] Performance monitoring started")
+
+    # --- Automated daily data retrieval, sorting, and preprocessing ---
+    from datetime import datetime
+    from core import processor
+    import sys
+    sys.path.insert(0, str((Path(__file__).parent.parent / "scripts")))
+    from scripts.simple_data_retrieval import SimpleDataRetriever, load_config
+
+    async def automated_daily_job():
+        while True:
+            try:
+                logger.info("[AUTO] Starting daily data retrieval and preprocessing...")
+                # Load the CSV of silos with data
+                csv_path = Path("data/simple_retrieval/granaries_silos_with_dates.csv")
+                if not csv_path.exists():
+                    logger.error(f"[AUTO] CSV file not found: {csv_path}")
+                    await asyncio.sleep(86400)
+                    continue
+                df = pd.read_csv(csv_path, encoding="utf-8-sig")
+                today = datetime.now().strftime("%Y-%m-%d")
+                config = load_config()
+                retriever = SimpleDataRetriever(config['database'])
+
+                # Only process silos with data_available == 'Yes'
+                silos = df[df['data_available'] == 'Yes']
+                # Track which granaries were updated
+                updated_granaries = set()
+                from granarypredict.streaming_processor import MassiveDatasetProcessor
+                for idx, row in silos.iterrows():
+                    granary_name = row['granary_name']
+                    silo_id = row['silo_id']
+                    start_date = today
+                    end_date = today
+                    try:
+                        logger.info(f"[AUTO] Retrieving data for {granary_name} / {silo_id} for {today}")
+                        success = retriever.retrieve_and_save(granary_name, silo_id, start_date, end_date, output_dir="data/simple_retrieval")
+                        if not success:
+                            logger.warning(f"[AUTO] No data for {granary_name} / {silo_id} on {today}")
+                            continue
+                        # Find the output file
+                        safe_granary_name = granary_name.encode('ascii', errors='ignore').decode('ascii') or 'granary'
+                        safe_silo_id = silo_id.encode('ascii', errors='ignore').decode('ascii') or 'silo'
+                        filename = f"{safe_granary_name}_{safe_silo_id}_{today}_to_{today}.parquet"
+                        filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
+                        file_path = Path("data/simple_retrieval") / filename
+                        if not file_path.exists():
+                            logger.warning(f"[AUTO] Output file not found: {file_path}")
+                            continue
+                        # Log record count in raw file
+                        try:
+                            df_raw = pd.read_parquet(file_path)
+                            logger.info(f"[AUTO] Raw file {file_path} contains {len(df_raw)} records.")
+                        except Exception as read_e:
+                            logger.warning(f"[AUTO] Could not read raw file {file_path}: {read_e}")
+                        # Sort raw data using streaming processor
+                        try:
+                            sorted_file = Path("service/data/granaries") / f"{safe_granary_name}_sorted.parquet"
+                            MassiveDatasetProcessor.sort_file(str(file_path), str(sorted_file), sort_by=['granary_name', 'detection_time'])
+                            updated_granaries.add(granary_name)
+                            logger.info(f"[AUTO] Sorted {silo_id} data into granary file for {granary_name}: {sorted_file}")
+                        except Exception as sort_e:
+                            logger.error(f"[AUTO] Sorting failed for {granary_name} / {silo_id}: {sort_e}")
+                        # Check sorted granary file existence and log record count
+                        if sorted_file.exists():
+                            try:
+                                df_granary = pd.read_parquet(sorted_file)
+                                logger.info(f"[AUTO] Sorted granary file {sorted_file} now contains {len(df_granary)} records.")
+                            except Exception as g_e:
+                                logger.warning(f"[AUTO] Could not read sorted granary file {sorted_file}: {g_e}")
+                        else:
+                            logger.warning(f"[AUTO] Sorted granary file not found after sorting: {sorted_file}")
+                        # Delete raw data file after sorting
+                        try:
+                            file_path.unlink()
+                            logger.info(f"[AUTO] Deleted raw data file: {file_path}")
+                        except Exception as del_e:
+                            logger.warning(f"[AUTO] Could not delete raw data file {file_path}: {del_e}")
+                    except Exception as e:
+                        logger.error(f"[AUTO] Error processing {granary_name} / {silo_id}: {e}")
+                # Preprocess each updated granary file
+                for granary_name in updated_granaries:
+                    try:
+                        safe_granary_name = granary_name.encode('ascii', errors='ignore').decode('ascii') or 'granary'
+                        sorted_file = Path("service/data/granaries") / f"{safe_granary_name}_sorted.parquet"
+                        processed_file = Path("service/data/processed") / f"{safe_granary_name}_processed.parquet"
+                        # Preprocess sorted granary file using streaming processor
+                        from granarypredict.streaming_processor import MassiveDatasetProcessor
+                        MassiveDatasetProcessor.process_file(str(sorted_file), str(processed_file))
+                        logger.info(f"[AUTO] Preprocessed granary file for {granary_name}: {processed_file}")
+                        # Check processed file existence and log record count
+                        if processed_file.exists():
+                            try:
+                                df_processed = pd.read_parquet(processed_file)
+                                logger.info(f"[AUTO] Processed file {processed_file} contains {len(df_processed)} records.")
+                            except Exception as p_e:
+                                logger.warning(f"[AUTO] Could not read processed file {processed_file}: {p_e}")
+                        else:
+                            logger.warning(f"[AUTO] Processed file not found after preprocessing: {processed_file}")
+                    except Exception as e:
+                        logger.error(f"[AUTO] Error preprocessing granary {granary_name}: {e}")
+                logger.info("[AUTO] Daily data retrieval and preprocessing completed.")
+            except Exception as e:
+                logger.error(f"[AUTO] Automated job failed: {e}")
+            # Sleep for 24 hours
+            await asyncio.sleep(86400)
+    asyncio.create_task(automated_daily_job())
     
     yield
     
