@@ -21,6 +21,7 @@ optuna_cache/
 
 # Data folders at any level
 **/data/
+**/temp/
 **/models/
 **/optuna_cache/
 **/temp_uploads/
