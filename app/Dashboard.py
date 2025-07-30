@@ -8,7 +8,6 @@ def generate_and_store_forecast_api(model_name: str, horizon: int, evaluations: 
         "error": None,
         "future_df": None,
         "X_future": None,
-        "parquet_path": None,
     }
     try:
         res_eval = evaluations.get(model_name)
@@ -123,41 +122,7 @@ def generate_and_store_forecast_api(model_name: str, horizon: int, evaluations: 
         _d(traceback.format_exc())
         return result
 
-    # Persist predictions to Parquet
-    try:
-        core_cols = [
-            c for c in [
-                "granary_id",
-                "heap_id",
-                "grid_x",
-                "grid_y",
-                "grid_z",
-                "detection_time",
-                "forecast_day",
-                "predicted_temp",
-            ]
-            if c in future_df.columns
-        ]
-        out_df = future_df[core_cols].copy()
-        _d(f"[EXPLORE-API] out_df shape: {out_df.shape}, columns: {list(out_df.columns)}")
-        out_dir = pathlib.Path("data/forecasts")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        forecast_name = f"{pathlib.Path(model_name).stem}_forecast_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        forecast_path = out_dir / forecast_name
-        from granarypredict.ingestion import save_granary_data
-        parquet_path = save_granary_data(
-            df=out_df,
-            filepath=forecast_path,
-            format='parquet',
-            compression='snappy'
-        )
-        result["parquet_path"] = str(parquet_path)
-        _d(f"[FORECAST-API] Parquet written to {parquet_path}")
-    except Exception as exc:
-        result["error"] = f"Error writing forecast CSV: {exc}"
-        _d(f"[ERROR-API] Could not write forecast CSV: {exc}")
-        _d(traceback.format_exc())
-        result["success"] = False
+    # Removed Parquet file output. Only return JSON-compatible result.
     return result
 import pathlib
 # --- API imports ---

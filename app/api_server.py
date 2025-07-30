@@ -207,7 +207,6 @@ def forecast_endpoint(request: ForecastRequest):
             forecast_json = []
         return {
             "success": True,
-            "parquet_path": forecast_result.get("parquet_path"),
             "rows": len(forecast_json),
             "forecasts": forecast_json
         }
