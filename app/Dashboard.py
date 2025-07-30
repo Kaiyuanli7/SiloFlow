@@ -3927,7 +3927,25 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     before_cols = list(df.columns)
     df = cleaning.basic_clean(df)
     _d(f"basic_clean: cols before={len(before_cols)} after={len(df.columns)} rows={len(df)}")
-
+    # Use Polars for performance-critical preprocessing if available
+    try:
+        from granarypredict.polars_adapter import to_polars, to_pandas, PolarsFeatures
+        import polars as pl
+        # Convert to Polars if not already
+        df_pl = to_polars(df)
+        # Example: time features, lags, rolling stats (customize as needed)
+        df_pl = PolarsFeatures.create_time_features_polars(df_pl)
+        df_pl = PolarsFeatures.add_lags_polars(df_pl)
+        df_pl = PolarsFeatures.add_rolling_stats_polars(df_pl)
+        # Convert back to Pandas for ML compatibility
+        df = to_pandas(df_pl)
+    except Exception as e:
+        import logging
+        logging.getLogger("Dashboard").warning(f"Polars preprocessing failed, using Pandas: {e}")
+        # Fallback: original Pandas-based preprocessing (implement as needed)
+        # ...existing pandas preprocessing code...
+        pass
+    return df
     # -------------------------------------------------------------
     # 1️⃣ Insert missing calendar-day rows first
     # -------------------------------------------------------------

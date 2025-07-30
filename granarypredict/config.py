@@ -45,4 +45,5 @@ __all__ = [
     "METEOROLOGY_API_BASE",
     "COMPANY_API_BASE",
     "GRAIN_ALERT_THRESHOLDS",
+    "HORIZON_DAYS",
 ] 

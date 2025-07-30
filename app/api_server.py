@@ -87,78 +87,85 @@ def forecast_endpoint(request: ForecastRequest):
             logger.warning("No data found for the specified criteria.")
             raise HTTPException(status_code=404, detail="No data found for the specified criteria")
         logger.info(f"Retrieved {len(df)} records from database.")
+        # Output raw pulled data as CSV for debugging
+        try:
+            raw_csv_path = f"debug_raw_{granary_name}_{silo_id}_{start_date}_{end_date}.csv"
+            df.to_csv(raw_csv_path, index=False, encoding="utf-8-sig")
+            logger.info(f"Raw pulled data written to {raw_csv_path}")
+        except Exception as e:
+            logger.error(f"Failed to write raw CSV: {e}")
 
-        # Error prevention: check if last 7 days (including today) are present for each grid BEFORE filling
+        # Apply all preprocessing steps from Dashboard.py
         try:
-            required_cols = {'grid_x', 'grid_y', 'grid_z', 'detection_time'}
-            if required_cols.issubset(df.columns):
-                df['detection_time'] = pd.to_datetime(df['detection_time'])
-                last_7_days = pd.date_range(end=pd.to_datetime(end_date), periods=7, freq='D')
-                missing_grids = []
-                for grid, group in df.groupby(['grid_x', 'grid_y', 'grid_z']):
-                    group_dates = set(group['detection_time'])
-                    missing = [d for d in last_7_days if d not in group_dates]
-                    if missing:
-                        missing_grids.append({'grid': grid, 'missing_dates': [d.strftime('%Y-%m-%d') for d in missing]})
-                if missing_grids:
-                    logger.error(f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
-                    raise HTTPException(status_code=400, detail=f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
-            else:
-                logger.warning("DataFrame missing required columns for grid/date filling. Skipping last 7 day check.")
-        except Exception as e:
-            logger.error(f"Error during last 7 day missing check: {e}")
-            # Continue with original df if check fails
-        # Fill missing dates for each grid (xyz) by replicating nearest available row
-        try:
-            import numpy as np
-            all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
-            required_cols = {'grid_x', 'grid_y', 'grid_z', 'detection_time'}
-            if required_cols.issubset(df.columns):
-                df['detection_time'] = pd.to_datetime(df['detection_time'])
-                filled_rows = []
-                for grid, group in df.groupby(['grid_x', 'grid_y', 'grid_z']):
-                    group_dates = set(group['detection_time'])
-                    for date in all_dates:
-                        if date not in group_dates:
-                            # Find nearest available date in group
-                            nearest = min(group_dates, key=lambda d: abs((d - date).days)) if group_dates else None
-                            if nearest is not None:
-                                nearest_row = group[group['detection_time'] == nearest].iloc[0].copy()
-                                nearest_row['detection_time'] = date
-                                filled_rows.append(nearest_row)
-                if filled_rows:
-                    df = pd.concat([df, pd.DataFrame(filled_rows)], ignore_index=True)
-                    logger.info(f"Filled {len(filled_rows)} missing date rows by nearest grid replication.")
-            else:
-                logger.warning("DataFrame missing required columns for grid/date filling. Skipping fill.")
-            # Error prevention: check if last 7 days (including today) are present for each grid
-            last_7_days = pd.date_range(end=pd.to_datetime(end_date), periods=7, freq='D')
-            missing_grids = []
-            for grid, group in df.groupby(['grid_x', 'grid_y', 'grid_z']):
-                group_dates = set(group['detection_time'])
-                missing = [d for d in last_7_days if d not in group_dates]
-                if missing:
-                    missing_grids.append({'grid': grid, 'missing_dates': [d.strftime('%Y-%m-%d') for d in missing]})
-            if missing_grids:
-                logger.error(f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
-                raise HTTPException(status_code=400, detail=f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
-        except Exception as e:
-            logger.error(f"Error during missing date filling: {e}")
-            # Continue with original df if filling fails
-        # Preprocess and forecast
-        try:
-            processed_df = Dashboard._preprocess_df(df)
-            logger.info(f"Preprocessing complete. Processed shape: {processed_df.shape}")
+            # 1. Standardize columns
+            from granarypredict.ingestion import standardize_granary_csv
+            df_std = standardize_granary_csv(df)
+            logger.info(f"Standardization complete. Columns: {list(df_std.columns)}")
+            # 2. Basic cleaning
+            from granarypredict import cleaning
+            df_clean = cleaning.basic_clean(df_std)
+            logger.info(f"Basic cleaning complete. Columns: {list(df_clean.columns)}")
+            # 3. Fill missing values
+            df_filled = cleaning.fill_missing(df_clean)
+            logger.info(f"Fill missing complete. Columns: {list(df_filled.columns)}")
+            # 4. Time features
+            from granarypredict import features
+            df_time = features.create_time_features(df_filled)
+            logger.info(f"Time features added. Columns: {list(df_time.columns)}")
+            # 5. Spatial features
+            df_spatial = features.create_spatial_features(df_time)
+            logger.info(f"Spatial features added. Columns: {list(df_spatial.columns)}")
+            # 6. Time since last measurement
+            df_quality = features.add_time_since_last_measurement(df_spatial)
+            logger.info(f"Time since last measurement added. Columns: {list(df_quality.columns)}")
+            # 7. Lag features
+            df_lag = features.add_multi_lag_parallel(df_quality, lags=(1,2,3,4,5,6,7,14,30))
+            logger.info(f"Lag features added. Columns: {list(df_lag.columns)}")
+            # 8. Rolling stats
+            df_roll = features.add_rolling_stats_parallel(df_lag, window_days=7)
+            logger.info(f"Rolling stats added. Columns: {list(df_roll.columns)}")
+            # 9. Directional features
+            df_dir = features.add_directional_features_lean(df_roll)
+            logger.info(f"Directional features added. Columns: {list(df_dir.columns)}")
+            # 10. Stability features
+            df_stab = features.add_stability_features_parallel(df_dir)
+            logger.info(f"Stability features added. Columns: {list(df_stab.columns)}")
+            # 11. Horizon-specific directional features
+            HORIZON_DAYS = 7
+            df_horizon = features.add_horizon_specific_directional_features(df_stab, max_horizon=HORIZON_DAYS)
+            logger.info(f"Horizon-specific directional features added. Columns: {list(df_horizon.columns)}")
+            # 12. Multi-horizon targets
+            HORIZON_TUPLE = (1, 2, 3, 4, 5, 6, 7)
+            df_targets = features.add_multi_horizon_targets(df_horizon, horizons=HORIZON_TUPLE)
+            logger.info(f"Multi-horizon targets added. Columns: {list(df_targets.columns)}")
+            # 13. Assign group id
+            from granarypredict.data_utils import assign_group_id, comprehensive_sort
+            df_grouped = assign_group_id(df_targets)
+            logger.info(f"Group id assigned. Columns: {list(df_grouped.columns)}")
+            # 14. Comprehensive sort
+            processed_df = comprehensive_sort(df_grouped)
+            logger.info(f"Comprehensive sort complete. Columns: {list(processed_df.columns)}")
+            # Output processed data as CSV for debugging
+            processed_csv_path = f"debug_processed_{granary_name}_{silo_id}_{start_date}_{end_date}.csv"
+            processed_df.to_csv(processed_csv_path, index=False, encoding="utf-8-sig")
+            logger.info(f"Processed data written to {processed_csv_path}")
         except Exception as e:
             logger.error(f"Preprocessing failed: {e}")
             raise HTTPException(status_code=500, detail=f"Preprocessing failed: {e}")
 
+
+        # Load the trained model (no training allowed)
         try:
             model = Dashboard.load_trained_model(model_path)
             logger.info("Model loaded successfully.")
         except Exception as e:
             logger.error(f"Model loading failed: {e}")
             raise HTTPException(status_code=500, detail=f"Model loading failed: {e}")
+
+        # Ensure no training is performed in forecast path
+        if hasattr(model, "fit") and getattr(model, "_is_fitted", True) is False:
+            logger.error("Model is not trained. Forecasting should not trigger training.")
+            raise HTTPException(status_code=500, detail="Model is not trained. Forecasting should not trigger training.")
 
         try:
             features = Dashboard.get_feature_cols(model, processed_df)
@@ -170,8 +177,7 @@ def forecast_endpoint(request: ForecastRequest):
             logger.error(f"Feature selection failed: {e}")
             raise HTTPException(status_code=500, detail=f"Feature selection failed: {e}")
 
-        # Use the new FastAPI-compatible forecast function
-        # evaluations dict for API context (simulate session_state)
+        # Use the FastAPI-compatible forecast function (guaranteed no training)
         evaluations = {
             model_path: {
                 "df_base": processed_df,
@@ -185,7 +191,6 @@ def forecast_endpoint(request: ForecastRequest):
         logger.info("Forecast request completed successfully.")
         # Return all forecast rows as JSON
         future_df = forecast_result["future_df"]
-        # Only include columns that would be stored in the Parquet file
         core_cols = [
             "granary_id",
             "heap_id",
