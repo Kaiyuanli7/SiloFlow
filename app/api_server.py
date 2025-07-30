@@ -126,16 +126,28 @@ def forecast_endpoint(request: ForecastRequest):
             logger.error(f"Forecasting failed: {forecast_result.get('error')}")
             raise HTTPException(status_code=500, detail=f"Forecasting failed: {forecast_result.get('error')}")
         logger.info("Forecast request completed successfully.")
-        # Return the 7-day forecast data directly
+        # Return all forecast rows as JSON
         future_df = forecast_result["future_df"]
-        if future_df is None or future_df.empty:
-            return {"success": True, "forecasts": []}
-        # Convert DataFrame to list of dicts (records)
-        forecasts = future_df.to_dict(orient="records")
+        # Only include columns that would be stored in the Parquet file
+        core_cols = [
+            "granary_id",
+            "heap_id",
+            "grid_x",
+            "grid_y",
+            "grid_z",
+            "detection_time",
+            "forecast_day",
+            "predicted_temp",
+        ]
+        if future_df is not None:
+            forecast_json = future_df[core_cols].to_dict(orient="records") if all(c in future_df.columns for c in core_cols) else future_df.to_dict(orient="records")
+        else:
+            forecast_json = []
         return {
             "success": True,
-            "forecasts": forecasts,
-            "rows": len(forecasts)
+            "parquet_path": forecast_result.get("parquet_path"),
+            "rows": len(forecast_json),
+            "forecasts": forecast_json
         }
 
     except HTTPException as he:
