@@ -88,6 +88,63 @@ def forecast_endpoint(request: ForecastRequest):
             raise HTTPException(status_code=404, detail="No data found for the specified criteria")
         logger.info(f"Retrieved {len(df)} records from database.")
 
+        # Error prevention: check if last 7 days (including today) are present for each grid BEFORE filling
+        try:
+            required_cols = {'grid_x', 'grid_y', 'grid_z', 'detection_time'}
+            if required_cols.issubset(df.columns):
+                df['detection_time'] = pd.to_datetime(df['detection_time'])
+                last_7_days = pd.date_range(end=pd.to_datetime(end_date), periods=7, freq='D')
+                missing_grids = []
+                for grid, group in df.groupby(['grid_x', 'grid_y', 'grid_z']):
+                    group_dates = set(group['detection_time'])
+                    missing = [d for d in last_7_days if d not in group_dates]
+                    if missing:
+                        missing_grids.append({'grid': grid, 'missing_dates': [d.strftime('%Y-%m-%d') for d in missing]})
+                if missing_grids:
+                    logger.error(f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
+                    raise HTTPException(status_code=400, detail=f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
+            else:
+                logger.warning("DataFrame missing required columns for grid/date filling. Skipping last 7 day check.")
+        except Exception as e:
+            logger.error(f"Error during last 7 day missing check: {e}")
+            # Continue with original df if check fails
+        # Fill missing dates for each grid (xyz) by replicating nearest available row
+        try:
+            import numpy as np
+            all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            required_cols = {'grid_x', 'grid_y', 'grid_z', 'detection_time'}
+            if required_cols.issubset(df.columns):
+                df['detection_time'] = pd.to_datetime(df['detection_time'])
+                filled_rows = []
+                for grid, group in df.groupby(['grid_x', 'grid_y', 'grid_z']):
+                    group_dates = set(group['detection_time'])
+                    for date in all_dates:
+                        if date not in group_dates:
+                            # Find nearest available date in group
+                            nearest = min(group_dates, key=lambda d: abs((d - date).days)) if group_dates else None
+                            if nearest is not None:
+                                nearest_row = group[group['detection_time'] == nearest].iloc[0].copy()
+                                nearest_row['detection_time'] = date
+                                filled_rows.append(nearest_row)
+                if filled_rows:
+                    df = pd.concat([df, pd.DataFrame(filled_rows)], ignore_index=True)
+                    logger.info(f"Filled {len(filled_rows)} missing date rows by nearest grid replication.")
+            else:
+                logger.warning("DataFrame missing required columns for grid/date filling. Skipping fill.")
+            # Error prevention: check if last 7 days (including today) are present for each grid
+            last_7_days = pd.date_range(end=pd.to_datetime(end_date), periods=7, freq='D')
+            missing_grids = []
+            for grid, group in df.groupby(['grid_x', 'grid_y', 'grid_z']):
+                group_dates = set(group['detection_time'])
+                missing = [d for d in last_7_days if d not in group_dates]
+                if missing:
+                    missing_grids.append({'grid': grid, 'missing_dates': [d.strftime('%Y-%m-%d') for d in missing]})
+            if missing_grids:
+                logger.error(f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
+                raise HTTPException(status_code=400, detail=f"Insufficient data for forecasting. Missing last 7 days for grids: {missing_grids}")
+        except Exception as e:
+            logger.error(f"Error during missing date filling: {e}")
+            # Continue with original df if filling fails
         # Preprocess and forecast
         try:
             processed_df = Dashboard._preprocess_df(df)
