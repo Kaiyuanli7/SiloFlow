@@ -1,4 +1,170 @@
+# --------------------------------------------------
+# FastAPI-compatible helper to create & store forecast (no Streamlit)
+def generate_and_store_forecast_api(model_name: str, horizon: int, evaluations: dict) -> dict:
+    """Generate future_df for *model_name* and return results/errors as dict. No Streamlit dependencies."""
+    import traceback
+    result = {
+        "success": False,
+        "error": None,
+        "future_df": None,
+        "X_future": None,
+        "parquet_path": None,
+    }
+    try:
+        res_eval = evaluations.get(model_name)
+        if res_eval is None:
+            result["error"] = f"No evaluation found for model: {model_name}"
+            return result
+
+        base_df = res_eval.get("df_base")
+        categories_map = res_eval.get("categories_map", {})
+        mdl_result = load_trained_model(model_name)
+        if isinstance(mdl_result, dict) and "error" in mdl_result:
+            result["error"] = f"Model load failed for {model_name}: {mdl_result['error']}"
+            return result
+        mdl = mdl_result
+
+        if not isinstance(base_df, pd.DataFrame):
+            result["error"] = f"base_df is not a DataFrame for model: {model_name}"
+            return result
+        _d(f"[EXPLORE-API] base_df shape: {base_df.shape}, columns: {list(base_df.columns)}")
+        _d(f"[EXPLORE-API] categories_map: {categories_map}")
+        _d(f"[EXPLORE-API] Model type: {type(mdl)}")
+    except Exception as exc:
+        result["error"] = f"Critical error during forecast setup: {exc}"
+        _d(f"[CRITICAL-API] Exception in setup: {exc}")
+        _d(traceback.format_exc())
+        return result
+
+    try:
+        if isinstance(mdl, (MultiOutputRegressor, MultiLGBMRegressor)) and horizon <= HORIZON_DAYS:
+            sensors_key = [c for c in [
+                "granary_id", "heap_id", "grid_x", "grid_y", "grid_z"
+            ] if c in base_df.columns]
+            _d(f"[EXPLORE-API] sensors_key: {sensors_key}")
+            last_rows = (
+                base_df.sort_values("detection_time")
+                .groupby(sensors_key, dropna=False)
+                .tail(1)
+                .copy()
+            )
+            _d(f"[EXPLORE-API] last_rows shape: {last_rows.shape}")
+            X_snap, _ = features.select_feature_target_multi(
+                last_rows, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
+            )
+            _d(f"[EXPLORE-API] X_snap shape: {X_snap.shape}")
+            model_feats = get_feature_cols(mdl, X_snap)
+            _d(f"[EXPLORE-API] model_feats: {model_feats}")
+            X_snap_aligned = X_snap.reindex(columns=model_feats, fill_value=0)
+            _d(f"[EXPLORE-API] X_snap_aligned shape: {X_snap_aligned.shape}")
+            preds_mat = model_utils.predict(mdl, X_snap_aligned)
+            _d(f"[EXPLORE-API] preds_mat shape: {getattr(preds_mat, 'shape', None)}")
+            n_out = preds_mat.shape[1] if getattr(preds_mat, "ndim", 1) == 2 else 1
+            all_future_frames: list[pd.DataFrame] = []
+            last_dt = pd.to_datetime(last_rows["detection_time"]).max()
+            for h in range(1, horizon + 1):
+                day_frame = last_rows.copy()
+                day_frame["detection_time"] = last_dt + timedelta(days=h)
+                day_frame["forecast_day"] = h
+                idx = min(h - 1, n_out - 1)
+                if getattr(preds_mat, "ndim", 1) == 2:
+                    pred_val = preds_mat[:, idx]
+                else:
+                    pred_val = preds_mat
+                day_frame["predicted_temp"] = pred_val
+                day_frame["temperature_grain"] = pred_val
+                day_frame[TARGET_TEMP_COL] = pred_val
+                day_frame["is_forecast"] = True
+                all_future_frames.append(day_frame)
+            future_df = pd.concat(all_future_frames, ignore_index=True)
+            future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
+            X_day_aligned = X_snap_aligned.copy()
+        else:
+            hist_df = base_df.copy()
+            all_future_frames: list[pd.DataFrame] = []
+            for d in range(1, horizon + 1):
+                day_df = make_future(hist_df, horizon_days=1)
+                day_df = _inject_future_lag(day_df, hist_df)
+                day_df["forecast_day"] = d
+                day_df = features.add_time_since_last_measurement(day_df)
+                day_df = features.add_multi_lag_parallel(day_df, lags=(1,2,3,4,5,6,7,14,30))
+                day_df = features.add_rolling_stats_parallel(day_df, window_days=7)
+                for col, cats in categories_map.items():
+                    if col in day_df.columns:
+                        day_df[col] = pd.Categorical(day_df[col], categories=cats)
+                X_day, _ = features.select_feature_target_multi(
+                    day_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
+                )
+                _d(f"[EXPLORE-API] Day {d} X_day shape: {X_day.shape}")
+                model_feats = get_feature_cols(mdl, X_day)
+                _d(f"[EXPLORE-API] Day {d} model_feats: {model_feats}")
+                X_day_aligned = X_day.reindex(columns=model_feats, fill_value=0)
+                _d(f"[EXPLORE-API] Day {d} X_day_aligned shape: {X_day_aligned.shape}")
+                preds = model_utils.predict(mdl, X_day_aligned)
+                _d(f"[EXPLORE-API] Day {d} preds shape: {getattr(preds, 'shape', None)}")
+                if hasattr(preds, 'ndim') and preds.ndim == 2:
+                    preds_step = preds[:, 0]
+                else:
+                    preds_step = preds
+                day_df["predicted_temp"] = preds_step
+                day_df["temperature_grain"] = preds_step
+                day_df[TARGET_TEMP_COL] = preds_step
+                day_df["is_forecast"] = True
+                hist_df = pd.concat([hist_df, day_df], ignore_index=True, sort=False)
+                all_future_frames.append(day_df)
+            future_df = pd.concat(all_future_frames, ignore_index=True)
+            future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
+        result["future_df"] = future_df
+        result["X_future"] = X_day_aligned
+        result["success"] = True
+    except Exception as exc:
+        result["error"] = f"Error during forecast generation: {exc}"
+        _d(f"[ERROR-API] Exception in forecast generation: {exc}")
+        _d(traceback.format_exc())
+        return result
+
+    # Persist predictions to Parquet
+    try:
+        core_cols = [
+            c for c in [
+                "granary_id",
+                "heap_id",
+                "grid_x",
+                "grid_y",
+                "grid_z",
+                "detection_time",
+                "forecast_day",
+                "predicted_temp",
+            ]
+            if c in future_df.columns
+        ]
+        out_df = future_df[core_cols].copy()
+        _d(f"[EXPLORE-API] out_df shape: {out_df.shape}, columns: {list(out_df.columns)}")
+        out_dir = pathlib.Path("data/forecasts")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        forecast_name = f"{pathlib.Path(model_name).stem}_forecast_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        forecast_path = out_dir / forecast_name
+        from granarypredict.ingestion import save_granary_data
+        parquet_path = save_granary_data(
+            df=out_df,
+            filepath=forecast_path,
+            format='parquet',
+            compression='snappy'
+        )
+        result["parquet_path"] = str(parquet_path)
+        _d(f"[FORECAST-API] Parquet written to {parquet_path}")
+    except Exception as exc:
+        result["error"] = f"Error writing forecast CSV: {exc}"
+        _d(f"[ERROR-API] Could not write forecast CSV: {exc}")
+        _d(traceback.format_exc())
+        result["success"] = False
+    return result
 import pathlib
+# --- API imports ---
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.responses import JSONResponse
+import uvicorn
+
 import pickle
 from datetime import timedelta, datetime
 from typing import Optional, List
@@ -39,95 +205,7 @@ from sklearn.model_selection import GroupKFold
 
 _TRANSLATIONS_ZH: dict[str, str] = {
     # Core UI elements
-    "Language / 语言": "语言 / Language",
-    "English": "英文",
-    "中文": "中文",
-    
-    # Sidebar & section titles
-    "Data": "数据",
-    "Train / Retrain Model": "训练 / 重新训练模型",
-    "Training split mode": "训练拆分模式",
-    "Percentage": "百分比",
-    "Last 30 days": "最近 30 天",
-    "Train split (%)": "训练集比例 (%)",
-    "Algorithm": "算法",
-    "Iterations / Trees": "迭代 / 树数",
-    "Future-safe (exclude env vars)": "未来安全（排除环境变量）",
-    "Evaluate Model": "评估模型",
-    "Select evaluated model": "选择已评估模型",
-    "Generate Forecast": "生成预测",
-    "Performance Optimization": "性能优化",
-    "Parameter Cache": "参数缓存",
-    
-    # Training options
-    "Optuna hyperparameter optimization": "Optuna 超参数优化",
-    "Quantile regression objective": "分位数回归目标",
-    "Anchor-day early stopping": "锚定日提前停止",
-    "Horizon Balancing Configuration": "预测期平衡配置",
-    "Balance horizon training": "平衡预测期训练",
-    "Horizon weighting strategy": "预测期权重策略",
-    "equal": "等权重",
-    "increasing": "递增权重",
-    "decreasing": "递减权重",
-    "Optuna trials": "Optuna 试验次数",
-    "Fast Optuna mode": "快速 Optuna 模式",
-    "Enable parallel trials": "启用并行试验",
-    "Parallel jobs": "并行作业数",
-    "Use parameter cache": "使用参数缓存",
-    "Force re-optimization": "强制重新优化",
-    "Clear cache": "清除缓存",
-    "Clear all cache": "清除所有缓存",
-    "Refresh": "刷新",
-    
-    # Help text
-    "Enable Optuna to automatically tune LightGBM parameters for optimal performance": "启用 Optuna 自动调整 LightGBM 参数以获得最佳性能",
-    "Use LightGBM quantile regression (alpha 0.5) for improved mean absolute error performance": "使用 LightGBM 分位数回归（alpha 0.5）以提高平均绝对误差性能",
-    "Use 7-day consecutive forecasting accuracy for early stopping with optimized interval checking": "使用 7 天连续预测准确性进行提前停止，优化间隔检查",
-    "Ensures equal priority for all forecast horizons (H+1 through H+7) during model training": "确保在模型训练期间所有预测期（H+1 到 H+7）具有相同优先级",
-    "equal: All horizons get equal priority (recommended) | increasing: Later horizons get more weight | decreasing: Earlier horizons get more weight": "等权重：所有预测期具有相同优先级（推荐）| 递增权重：后期预测期权重更大 | 递减权重：前期预测期权重更大",
-    "Choose how to divide data into training vs validation sets.": "选择如何将数据分为训练集和验证集。",
-    "Percentage of data used for training; set to 100% to train on the whole dataset without a validation split.": "用于训练的数据百分比；设置为 100% 可在整个数据集上训练而不进行验证分割。",
-    "Use performance optimizations: 2-fold CV, lower tree limits, aggressive early stopping": "使用性能优化：2 折交叉验证、较低的树限制、积极的提前停止",
-    "Run multiple Optuna trials in parallel for 2-4x faster optimization": "并行运行多个 Optuna 试验，优化速度提高 2-4 倍",
-    "Number of parallel processes (max: {} CPU cores)": "并行进程数（最大：{} 个 CPU 核心）",
-    "Automatically save/load optimal parameters from previous Optuna runs. Works even when Optuna is disabled!": "自动保存/加载先前 Optuna 运行的最优参数。即使禁用 Optuna 也能工作！",
-    "Run Optuna even if cached parameters exist": "即使存在缓存参数也运行 Optuna",
-    "Clear all cached parameters": "清除所有缓存的参数",
-    "Show detailed internal processing messages": "显示详细的内部处理消息",
-    
-    # Status messages and notifications
-    "Optuna hyperparameter optimization enabled": "Optuna 超参数优化已启用",
-    "Using default LightGBM parameters": "使用默认 LightGBM 参数",
-    "Quantile regression objective enabled": "分位数回归目标已启用",
-    "Using standard regression objective": "使用标准回归目标",
-    "Anchor-day early stopping enabled for enhanced 7-day accuracy": "锚定日提前停止已启用，提高 7 天准确性",
-    "Using standard early stopping method": "使用标准提前停止方法",
-    "Horizon balancing enabled - correcting forecast horizon bias": "预测期平衡已启用 - 纠正预测期偏差",
-    "Using standard horizon weighting approach": "使用标准预测期权重方法",
-    "Future-safe mode enabled - environmental variables excluded": "未来安全模式已启用 - 排除环境变量",
-    "All variables included, including environmental data": "包含所有变量，包括环境数据",
-    
-    # Processing messages
-    "Processing uploaded file: {}": "处理上传的文件：{}",
-    "Processing uploaded file...": "处理上传的文件...",
-    "Applied filters: {}": "应用的过滤器：{}",
-    "Displaying all locations": "显示所有位置",
-    "Data preprocessing complete. Dataset shape: {}": "数据预处理完成。数据集形状：{}",
-    "Selected model: {}": "选择的模型：{}",
-    "Initiating model training process...": "启动模型训练过程...",
-    "Starting model evaluation...": "开始模型评估...",
-    "Starting evaluation and forecast generation...": "开始评估和预测生成...",
-    "Evaluation completed for {} model(s)": "已完成 {} 个模型的评估",
-    "Forecast generated for {} model(s)": "已为 {} 个模型生成预测",
-    "Generating forecast for selected model...": "为选定模型生成预测...",
-    
-    # Conservative system messages
-    "Conservative Temperature System": "保守温度系统",
-    "Conservative mode": "保守模式",
-    "Stability boost": "稳定性增强",
-    "Directional boost": "方向性增强",
-    "Bootstrap samples": "自助采样数",
-    "Conservative System Features (Click to expand)": "保守系统特性（点击展开）",
+## FastAPI code removed. Streamlit GUI only.
     "Thermal Physics Features:": "热物理特性：",
     "Thermal Inertia": "热惯性",
     "Stability Index": "稳定指数",
@@ -626,8 +704,6 @@ def is_future_safe_model(model_name: str) -> bool:
     return "fs_" in model_name.lower()
 
 st.set_page_config(page_title="SiloFlow", layout="wide")
-
-
 
 # Directory that holds bundled sample CSVs shipped with the repo
 PRELOADED_DATA_DIR = pathlib.Path("data/preloaded")
@@ -3604,47 +3680,63 @@ def render_forecast(model_name: str):
 def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
     """Generate future_df for *model_name* and store in session_state['forecasts'].
     Returns True if successful, False otherwise."""
-    res_eval = st.session_state.get("evaluations", {}).get(model_name)
-    if res_eval is None:
-        st.error(_t("Please evaluate the model first."))
-        return False
+    try:
+        res_eval = st.session_state.get("evaluations", {}).get(model_name)
+        if res_eval is None:
+            st.error(_t("Please evaluate the model first."))
+            _d(f"[ERROR] No evaluation found for model: {model_name}")
+            return False
 
-    base_df = res_eval.get("df_base")
-    categories_map = res_eval.get("categories_map", {})
-    mdl_result = load_trained_model(model_name)
-    
-    if isinstance(mdl_result, dict) and "error" in mdl_result:
-        st.error(mdl_result["error"])
-        return False
-    mdl = mdl_result
+        base_df = res_eval.get("df_base")
+        categories_map = res_eval.get("categories_map", {})
+        mdl_result = load_trained_model(model_name)
+        if isinstance(mdl_result, dict) and "error" in mdl_result:
+            st.error(mdl_result["error"])
+            _d(f"[ERROR] Model load failed for {model_name}: {mdl_result['error']}")
+            return False
+        mdl = mdl_result
 
-    if not isinstance(base_df, pd.DataFrame):
-        st.error(_t("Unable to access base data for forecasting."))
+        if not isinstance(base_df, pd.DataFrame):
+            st.error(_t("Unable to access base data for forecasting."))
+            _d(f"[ERROR] base_df is not a DataFrame for model: {model_name}")
+            return False
+        _d(f"[EXPLORE] base_df shape: {base_df.shape}, columns: {list(base_df.columns)}")
+        _d(f"[EXPLORE] categories_map: {categories_map}")
+        _d(f"[EXPLORE] Model type: {type(mdl)}")
+    except Exception as exc:
+        st.error(_t(f"Critical error during forecast setup: {exc}"))
+        _d(f"[CRITICAL] Exception in setup: {exc}")
+        import traceback
+        _d(traceback.format_exc())
         return False
 
     # Special handling if the model is *direct* multi-output and the requested
     # horizon fits within the model's native multi-output dimensions.
-    if isinstance(mdl, (MultiOutputRegressor, MultiLGBMRegressor)) and horizon <= HORIZON_DAYS:
+    try:
+        if isinstance(mdl, (MultiOutputRegressor, MultiLGBMRegressor)) and horizon <= HORIZON_DAYS:
         # 1. Take **last known row** per physical sensor as input snapshot
-        sensors_key = [c for c in [
-            "granary_id", "heap_id", "grid_x", "grid_y", "grid_z"
-        ] if c in base_df.columns]
-
-        last_rows = (
-            base_df.sort_values("detection_time")
-            .groupby(sensors_key, dropna=False)
-            .tail(1)
-            .copy()
-        )
-
-        # Prepare design matrix
-        X_snap, _ = features.select_feature_target_multi(
-            last_rows, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
-        )
-        model_feats = get_feature_cols(mdl, X_snap)
-        X_snap_aligned = X_snap.reindex(columns=model_feats, fill_value=0)
-
-        preds_mat = model_utils.predict(mdl, X_snap_aligned)  # shape (n, 3)
+            sensors_key = [c for c in [
+                "granary_id", "heap_id", "grid_x", "grid_y", "grid_z"
+            ] if c in base_df.columns]
+            _d(f"[EXPLORE] sensors_key: {sensors_key}")
+            last_rows = (
+                base_df.sort_values("detection_time")
+                .groupby(sensors_key, dropna=False)
+                .tail(1)
+                .copy()
+            )
+            _d(f"[EXPLORE] last_rows shape: {last_rows.shape}")
+            # Prepare design matrix
+            X_snap, _ = features.select_feature_target_multi(
+                last_rows, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
+            )
+            _d(f"[EXPLORE] X_snap shape: {X_snap.shape}")
+            model_feats = get_feature_cols(mdl, X_snap)
+            _d(f"[EXPLORE] model_feats: {model_feats}")
+            X_snap_aligned = X_snap.reindex(columns=model_feats, fill_value=0)
+            _d(f"[EXPLORE] X_snap_aligned shape: {X_snap_aligned.shape}")
+            preds_mat = model_utils.predict(mdl, X_snap_aligned)  # shape (n, 3)
+            _d(f"[EXPLORE] preds_mat shape: {getattr(preds_mat, 'shape', None)}")
         
         # Log uncertainty estimation during forecasting
         if isinstance(mdl, MultiLGBMRegressor) and hasattr(mdl, 'uncertainty_estimation'):
@@ -3657,96 +3749,87 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
                 _d(f"[FORECAST-UNCERTAINTY] No uncertainty estimation - point forecast only")
                 st.toast("⚠️ Forecast without uncertainty - no confidence intervals", icon="⚠️")
 
-        n_out = preds_mat.shape[1] if getattr(preds_mat, "ndim", 1) == 2 else 1
-
-        # Build future frames for 1, 2, 3-day horizons ------------------
-        all_future_frames: list[pd.DataFrame] = []
-        last_dt = pd.to_datetime(last_rows["detection_time"]).max()
-
-        for h in range(1, horizon + 1):
-            day_frame = last_rows.copy()
-            day_frame["detection_time"] = last_dt + timedelta(days=h)
-            day_frame["forecast_day"] = h
-
-            idx = min(h - 1, n_out - 1)  # fallback to last available output
-            if getattr(preds_mat, "ndim", 1) == 2:
-                pred_val = preds_mat[:, idx]
-            else:
-                pred_val = preds_mat  # 1-D: same value for all horizons
-
-            day_frame["predicted_temp"] = pred_val
-            day_frame["temperature_grain"] = pred_val
-            day_frame[TARGET_TEMP_COL] = pred_val
-            day_frame["is_forecast"] = True
-            all_future_frames.append(day_frame)
-
-        future_df = pd.concat(all_future_frames, ignore_index=True)
-
-        # Clear actual temperature values for forecast rows to avoid confusion in plots
-        future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
-
-        # Assign debug matrix for consistency with fallback path
-        X_day_aligned = X_snap_aligned.copy()
-
-    else:
-        # Fallback – original recursive loop (supports arbitrary horizons)
-        hist_df = base_df.copy()
-        all_future_frames: list[pd.DataFrame] = []
-
-        for d in range(1, horizon + 1):
-            # Generate placeholder rows for ONE day ahead
-            day_df = make_future(hist_df, horizon_days=1)
-            day_df = _inject_future_lag(day_df, hist_df)
-            day_df["forecast_day"] = d
-
-            # Extra features (lags, rolling) before encoding
-            day_df = features.add_time_since_last_measurement(day_df)
-            day_df = features.add_multi_lag_parallel(day_df, lags=(1,2,3,4,5,6,7,14,30))
-            day_df = features.add_rolling_stats_parallel(day_df, window_days=7)
-
-            # Apply categories levels
-            for col, cats in categories_map.items():
-                if col in day_df.columns:
-                    day_df[col] = pd.Categorical(day_df[col], categories=cats)
-
-            X_day, _ = features.select_feature_target_multi(
-                day_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
-            )
-            model_feats = get_feature_cols(mdl, X_day)
-            X_day_aligned = X_day.reindex(columns=model_feats, fill_value=0)
-            preds = model_utils.predict(mdl, X_day_aligned)
-            
-            # Log uncertainty for recursive forecasting (if multi-output)
-            if isinstance(mdl, MultiLGBMRegressor) and hasattr(mdl, 'uncertainty_estimation') and preds.ndim == 2:
-                if mdl.uncertainty_estimation:
-                    _d(f"[RECURSIVE-UNCERTAINTY] Day {d}: Uncertainty estimation applied to {preds.shape[1]} horizons")
+            n_out = preds_mat.shape[1] if getattr(preds_mat, "ndim", 1) == 2 else 1
+            # Build future frames for 1, 2, 3-day horizons ------------------
+            all_future_frames: list[pd.DataFrame] = []
+            last_dt = pd.to_datetime(last_rows["detection_time"]).max()
+            for h in range(1, horizon + 1):
+                day_frame = last_rows.copy()
+                day_frame["detection_time"] = last_dt + timedelta(days=h)
+                day_frame["forecast_day"] = h
+                idx = min(h - 1, n_out - 1)  # fallback to last available output
+                if getattr(preds_mat, "ndim", 1) == 2:
+                    pred_val = preds_mat[:, idx]
                 else:
-                    _d(f"[RECURSIVE-UNCERTAINTY] Day {d}: No uncertainty estimation - point predictions only")
-
-            if preds.ndim == 2:
-                preds_step = preds[:, 0]
-            else:
-                preds_step = preds
-
-            day_df["predicted_temp"] = preds_step
-            day_df["temperature_grain"] = preds_step  # feed back as history for next lag
-            day_df[TARGET_TEMP_COL] = preds_step
-            day_df["is_forecast"] = True
-
-            hist_df = pd.concat([hist_df, day_df], ignore_index=True, sort=False)
-            all_future_frames.append(day_df)
-
-        future_df = pd.concat(all_future_frames, ignore_index=True)
-
-        # Clear actual temperature values for forecast rows to avoid confusion in plots
-        future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
-
-    st.session_state.setdefault("forecasts", {})[model_name] = {
-        "future_df": future_df,
-        "future_horizon": horizon,
-        "X_future": X_day_aligned,  # last horizon step matrix for debug
-    }
-    _d(f"[FORECAST] Stored forecast – rows={len(future_df)}")
+                    pred_val = preds_mat  # 1-D: same value for all horizons
+                day_frame["predicted_temp"] = pred_val
+                day_frame["temperature_grain"] = pred_val
+                day_frame[TARGET_TEMP_COL] = pred_val
+                day_frame["is_forecast"] = True
+                all_future_frames.append(day_frame)
+            future_df = pd.concat(all_future_frames, ignore_index=True)
+            # Clear actual temperature values for forecast rows to avoid confusion in plots
+            future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
+            # Assign debug matrix for consistency with fallback path
+            X_day_aligned = X_snap_aligned.copy()
+        else:
+            # Fallback – original recursive loop (supports arbitrary horizons)
+            hist_df = base_df.copy()
+            all_future_frames: list[pd.DataFrame] = []
+            for d in range(1, horizon + 1):
+                # Generate placeholder rows for ONE day ahead
+                day_df = make_future(hist_df, horizon_days=1)
+                day_df = _inject_future_lag(day_df, hist_df)
+                day_df["forecast_day"] = d
+                # Extra features (lags, rolling) before encoding
+                day_df = features.add_time_since_last_measurement(day_df)
+                day_df = features.add_multi_lag_parallel(day_df, lags=(1,2,3,4,5,6,7,14,30))
+                day_df = features.add_rolling_stats_parallel(day_df, window_days=7)
+                # Apply categories levels
+                for col, cats in categories_map.items():
+                    if col in day_df.columns:
+                        day_df[col] = pd.Categorical(day_df[col], categories=cats)
+                X_day, _ = features.select_feature_target_multi(
+                    day_df, target_col=TARGET_TEMP_COL, horizons=HORIZON_TUPLE, allow_na=True
+                )
+                _d(f"[EXPLORE] Day {d} X_day shape: {X_day.shape}")
+                model_feats = get_feature_cols(mdl, X_day)
+                _d(f"[EXPLORE] Day {d} model_feats: {model_feats}")
+                X_day_aligned = X_day.reindex(columns=model_feats, fill_value=0)
+                _d(f"[EXPLORE] Day {d} X_day_aligned shape: {X_day_aligned.shape}")
+                preds = model_utils.predict(mdl, X_day_aligned)
+                _d(f"[EXPLORE] Day {d} preds shape: {getattr(preds, 'shape', None)}")
+                # Log uncertainty for recursive forecasting (if multi-output)
+                if isinstance(mdl, MultiLGBMRegressor) and hasattr(mdl, 'uncertainty_estimation') and hasattr(preds, 'ndim') and preds.ndim == 2:
+                    if mdl.uncertainty_estimation:
+                        _d(f"[RECURSIVE-UNCERTAINTY] Day {d}: Uncertainty estimation applied to {preds.shape[1]} horizons")
+                    else:
+                        _d(f"[RECURSIVE-UNCERTAINTY] Day {d}: No uncertainty estimation - point predictions only")
+                if hasattr(preds, 'ndim') and preds.ndim == 2:
+                    preds_step = preds[:, 0]
+                else:
+                    preds_step = preds
+                day_df["predicted_temp"] = preds_step
+                day_df["temperature_grain"] = preds_step  # feed back as history for next lag
+                day_df[TARGET_TEMP_COL] = preds_step
+                day_df["is_forecast"] = True
+                hist_df = pd.concat([hist_df, day_df], ignore_index=True, sort=False)
+                all_future_frames.append(day_df)
+            future_df = pd.concat(all_future_frames, ignore_index=True)
+            # Clear actual temperature values for forecast rows to avoid confusion in plots
+            future_df.loc[future_df["is_forecast"], TARGET_TEMP_COL] = np.nan
+        st.session_state.setdefault("forecasts", {})[model_name] = {
+            "future_df": future_df,
+            "future_horizon": horizon,
+            "X_future": X_day_aligned,  # last horizon step matrix for debug
+        }
+        _d(f"[FORECAST] Stored forecast – rows={len(future_df)}")
+    except Exception as exc:
+        st.error(_t(f"Error during forecast generation: {exc}"))
+        _d(f"[ERROR] Exception in forecast generation: {exc}")
+        import traceback
+        _d(traceback.format_exc())
+        return False
 
     # ---------------- Persist predictions to CSV -----------------
     try:
@@ -3765,14 +3848,12 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
             if c in future_df.columns
         ]
         out_df = future_df[core_cols].copy()
-
+        _d(f"[EXPLORE] out_df shape: {out_df.shape}, columns: {list(out_df.columns)}")
         # Ensure output directory exists
         out_dir = pathlib.Path("data/forecasts")
         out_dir.mkdir(parents=True, exist_ok=True)
-
         forecast_name = f"{pathlib.Path(model_name).stem}_forecast_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         forecast_path = out_dir / forecast_name
-        
         # Save as Parquet with snappy compression (60-80% smaller, 10x faster)
         from granarypredict.ingestion import save_granary_data
         parquet_path = save_granary_data(
@@ -3781,12 +3862,15 @@ def generate_and_store_forecast(model_name: str, horizon: int) -> bool:
             format='parquet',
             compression='snappy'
         )
-
         # Store path for UI download
         st.session_state["forecasts"][model_name]["parquet_path"] = str(parquet_path)
         _d(f"[FORECAST] Parquet written to {parquet_path}")
     except Exception as exc:
-        _d(f"Could not write forecast CSV: {exc}")
+        st.error(_t(f"Error writing forecast CSV: {exc}"))
+        _d(f"[ERROR] Could not write forecast CSV: {exc}")
+        import traceback
+        _d(traceback.format_exc())
+        return False
 
     return True
 

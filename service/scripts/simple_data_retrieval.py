@@ -206,18 +206,23 @@ class SimpleDataRetriever:
         # Step 1: Find silo information
         logger.info("Step 1: Looking up silo information...")
         all_data = self.get_all_granaries_and_silos()
-        silo_info = all_data[all_data['store_id'] == silo_id]
-        
-        if silo_info.empty:
-            logger.error(f"❌ Silo {silo_id} not found in database")
+        # Find all rows matching the granary_name
+        # First, get possible granary_ids for the given granary_name
+        # We need to join with get_granaries_with_details to get granary_name -> storepoint_id mapping
+        details_df = self.get_granaries_with_details()
+        matching_granary = details_df[details_df['granary_name'] == granary_name]
+        if matching_granary.empty:
+            logger.error(f"❌ Granary '{granary_name}' not found in database")
             return False
-        
+        granary_id = matching_granary['storepoint_id'].iloc[0]
+        # Now filter all_data for both storepoint_id and store_id
+        silo_info = all_data[(all_data['storepoint_id'] == granary_id) & (all_data['store_id'] == silo_id)]
+        if silo_info.empty:
+            logger.error(f"❌ Silo '{silo_id}' not found in granary '{granary_name}' (ID: {granary_id})")
+            return False
         sub_table_id = silo_info['sub_table_id'].iloc[0]
-        granary_id = silo_info['storepoint_id'].iloc[0]
-        # Handle potential encoding issues in silo name
         silo_name = str(silo_info['store_name'].iloc[0]).encode('utf-8', errors='ignore').decode('utf-8')
-        
-        logger.info(f"✅ Found silo: {silo_name}")
+        logger.info(f"Found silo: {silo_name}")
         logger.info(f"   Granary ID: {granary_id}")
         logger.info(f"   Sub-table ID: {sub_table_id}")
         
@@ -225,7 +230,7 @@ class SimpleDataRetriever:
         logger.info("Step 2: Validating date range...")
         min_date, max_date = self.get_silo_date_range(silo_id, sub_table_id)
         if min_date and max_date:
-            logger.info(f"✅ Silo data available from {min_date} to {max_date}")
+            logger.info(f"Silo data available from {min_date} to {max_date}")
         else:
             logger.warning("⚠️ Could not determine data availability")
         
@@ -241,7 +246,7 @@ class SimpleDataRetriever:
             logger.info("- There might be a configuration issue")
             return False
         
-        logger.info(f"✅ Retrieved {len(data)} records")
+        logger.info(f"Retrieved {len(data)} records")
         logger.info(f"   Columns: {list(data.columns)}")
         logger.info(f"   Memory usage: {data.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
         
@@ -261,7 +266,7 @@ class SimpleDataRetriever:
         data.to_parquet(file_path, index=False)
         file_size_mb = file_path.stat().st_size / 1024 / 1024
         
-        logger.info(f"✅ Data saved successfully!")
+        logger.info(f"Data saved successfully!")
         logger.info(f"   File: {file_path}")
         logger.info(f"   Size: {file_size_mb:.2f} MB")
         logger.info(f"   Records: {len(data)}")

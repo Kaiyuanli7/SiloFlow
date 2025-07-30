@@ -38,25 +38,49 @@ async def forecast_silo_endpoint(
         # Check if processed data exists for this granary
         processed_file = processor.processed_dir / f"{granary_name}_processed.parquet"
         if not processed_file.exists():
+            error_msg = f"Processed file not found: {processed_file}"
+            print(error_msg)
+            logger.error(error_msg)
+            # Check for similar files
+            similar_files = list(processor.processed_dir.glob(f"*{granary_name}*_processed.parquet"))
+            similar_files_msg = f"Similar processed files found: {[str(f) for f in similar_files]}"
+            print(similar_files_msg)
+            logger.error(similar_files_msg)
             raise HTTPException(
-                status_code=404, 
-                detail=f"No processed data found for granary '{granary_name}'. Run /pipeline first."
+                status_code=404,
+                detail=f"No processed data found for granary '{granary_name}'. Run /pipeline first. Checked path: {processed_file}. Similar files: {[str(f) for f in similar_files]}"
             )
-        
+
         # Check if model exists for this granary
         model_file = processor.models_dir / f"{granary_name}_forecast_model.joblib"
         compressed_model_file = processor.models_dir / f"{granary_name}_forecast_model.joblib.gz"
-        
+
         if not (model_file.exists() or compressed_model_file.exists()):
+            error_msg = f"Model file not found for granary '{granary_name}'. Checked: {model_file}, {compressed_model_file}"
+            print(error_msg)
+            logger.error(error_msg)
+            similar_models = list(processor.models_dir.glob(f"*{granary_name}*_forecast_model.joblib*"))
+            similar_models_msg = f"Similar model files found: {[str(f) for f in similar_models]}"
+            print(similar_models_msg)
+            logger.error(similar_models_msg)
             raise HTTPException(
                 status_code=404,
-                detail=f"No trained model found for granary '{granary_name}'. Train the model first."
+                detail=f"No trained model found for granary '{granary_name}'. Train the model first. Checked: {model_file}, {compressed_model_file}. Similar files: {[str(f) for f in similar_models]}"
             )
-        
+
         # Load processed data and filter for the specific silo
-        logger.info(f"Loading processed data from: {processed_file}")
-        df = pd.read_parquet(processed_file)
-        
+        try:
+            logger.info(f"Loading processed data from: {processed_file}")
+            df = pd.read_parquet(processed_file)
+        except Exception as e:
+            error_msg = f"Failed to load processed data from {processed_file}: {e}"
+            print(error_msg)
+            logger.error(error_msg)
+            raise HTTPException(
+                status_code=500,
+                detail=error_msg
+            )
+
         # Identify the silo column (try different possible names)
         silo_columns = ['heap_id', 'silo_id', 'storepointId']
         silo_col = None
@@ -64,38 +88,56 @@ async def forecast_silo_endpoint(
             if col in df.columns:
                 silo_col = col
                 break
-        
+
         if silo_col is None:
+            error_msg = f"No silo identifier column found in data. Columns present: {list(df.columns)}"
+            print(error_msg)
+            logger.error(error_msg)
             raise HTTPException(
                 status_code=400,
-                detail=f"No silo identifier column found in data. Expected one of: {silo_columns}"
+                detail=f"No silo identifier column found in data. Expected one of: {silo_columns}. Columns present: {list(df.columns)}"
             )
-        
+
         # Filter data for the specific silo
         silo_data = df[df[silo_col] == silo_id].copy()
         if silo_data.empty:
             available_silos = df[silo_col].unique().tolist()
+            error_msg = f"No data found for silo '{silo_id}' in granary '{granary_name}'. Available silos: {available_silos}"
+            print(error_msg)
+            logger.warning(error_msg)
             raise HTTPException(
                 status_code=404,
                 detail=f"Silo '{silo_id}' not found in granary '{granary_name}'. Available silos: {available_silos[:10]}"
             )
-        
+
         logger.info(f"Found {len(silo_data)} records for silo '{silo_id}' in granary '{granary_name}'")
-        
+
         # Get the latest data point for this silo
-        silo_data['detection_time'] = pd.to_datetime(silo_data['detection_time'])
-        silo_data = silo_data.sort_values('detection_time')
-        latest_date = silo_data['detection_time'].max()
-        
+        try:
+            silo_data['detection_time'] = pd.to_datetime(silo_data['detection_time'])
+            silo_data = silo_data.sort_values('detection_time')
+            latest_date = silo_data['detection_time'].max()
+        except Exception as e:
+            error_msg = f"Failed to process detection_time for silo '{silo_id}' in granary '{granary_name}': {e}"
+            print(error_msg)
+            logger.error(error_msg)
+            raise HTTPException(
+                status_code=500,
+                detail=error_msg
+            )
+
         # Get the most recent data for forecasting (use sensors from the latest date)
         latest_data = silo_data[silo_data['detection_time'] == latest_date].copy()
-        
+
         logger.info(f"Using {len(latest_data)} sensors from latest date: {latest_date}")
-        
+
         if latest_data.empty:
+            error_msg = f"No recent data found for silo '{silo_id}' in granary '{granary_name}' on latest date {latest_date}"
+            print(error_msg)
+            logger.warning(error_msg)
             raise HTTPException(
                 status_code=404,
-                detail=f"No recent data found for silo '{silo_id}' in granary '{granary_name}'"
+                detail=error_msg
             )
         
         # Generate forecasts using the granary pipeline forecasting logic
@@ -200,19 +242,39 @@ async def generate_silo_forecast(
             horizons=horizons,
             allow_na=True
         )
-        
+
         if X_future.empty:
             return {"success": False, "error": "No valid features generated for forecasting"}
-        
+
+        # Align prediction features to trained model's feature set
+        trained_features = None
+        # Try LightGBM sklearn API
+        if hasattr(model, 'feature_name_'):
+            trained_features = list(model.feature_name_)
+        # Try native Booster API
+        elif hasattr(model, 'booster_') and hasattr(model.booster_, 'feature_name'):
+            trained_features = list(model.booster_.feature_name())
+        # Try custom attribute
+        elif hasattr(model, 'feature_names'):
+            trained_features = list(model.feature_names)
+        if trained_features:
+            missing = [f for f in trained_features if f not in X_future.columns]
+            extra = [f for f in X_future.columns if f not in trained_features]
+            logger.info(f"Aligning prediction features. Model expects {len(trained_features)} features. Missing: {missing}. Extra: {extra}")
+            print(f"Aligning prediction features. Model expects {len(trained_features)} features. Missing: {missing}. Extra: {extra}")
+            X_future = X_future.reindex(columns=trained_features)
+
         logger.info(f"Generated feature matrix with shape: {X_future.shape}")
-        
+        print(f"Generated feature matrix with shape: {X_future.shape}")
+
         # Generate predictions
         predictions = predict(model, X_future)
-        
+
         if predictions is None:
             return {"success": False, "error": "Model prediction failed"}
-        
+
         logger.info(f"Generated predictions with shape: {predictions.shape if hasattr(predictions, 'shape') else len(predictions)}")
+        print(f"Generated predictions with shape: {predictions.shape if hasattr(predictions, 'shape') else len(predictions)}")
         
         # Create forecast results
         forecast_records = []

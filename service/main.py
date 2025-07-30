@@ -104,23 +104,33 @@ async def lifespan(app: FastAPI):
                             logger.info(f"[AUTO] Raw file {file_path} contains {len(df_raw)} records.")
                         except Exception as read_e:
                             logger.warning(f"[AUTO] Could not read raw file {file_path}: {read_e}")
-                        # Sort raw data using streaming processor
+                        # Sort raw data using streaming processor (process_massive_features)
                         try:
-                            sorted_file = Path("service/data/granaries") / f"{safe_granary_name}_sorted.parquet"
-                            MassiveDatasetProcessor.sort_file(str(file_path), str(sorted_file), sort_by=['granary_name', 'detection_time'])
-                            updated_granaries.add(granary_name)
-                            logger.info(f"[AUTO] Sorted {silo_id} data into granary file for {granary_name}: {sorted_file}")
+                            sorted_dir = Path("service/data/granaries")
+                            sorted_dir.mkdir(parents=True, exist_ok=True)
+                            sorted_file = sorted_dir / f"{safe_granary_name}_{safe_silo_id}_sorted.parquet"
+                            def sorting_features(chunk_df):
+                                if 'granary_name' in chunk_df.columns:
+                                    return chunk_df.sort_values(['granary_name', 'detection_time'] if 'detection_time' in chunk_df.columns else ['granary_name'])
+                                return chunk_df
+                            processor = MassiveDatasetProcessor()
+                            success = processor.process_massive_features(
+                                file_path=str(file_path),
+                                output_path=str(sorted_file),
+                                feature_functions=[sorting_features]
+                            )
+                            if success and sorted_file.exists():
+                                updated_granaries.add(granary_name)
+                                logger.info(f"[AUTO] Sorted {silo_id} data into granary file for {granary_name}: {sorted_file}")
+                                try:
+                                    df_granary = pd.read_parquet(sorted_file)
+                                    logger.info(f"[AUTO] Sorted granary file {sorted_file} now contains {len(df_granary)} records.")
+                                except Exception as g_e:
+                                    logger.warning(f"[AUTO] Could not read sorted granary file {sorted_file}: {g_e}")
+                            else:
+                                logger.warning(f"[AUTO] Sorted granary file not found or sorting failed: {sorted_file}")
                         except Exception as sort_e:
                             logger.error(f"[AUTO] Sorting failed for {granary_name} / {silo_id}: {sort_e}")
-                        # Check sorted granary file existence and log record count
-                        if sorted_file.exists():
-                            try:
-                                df_granary = pd.read_parquet(sorted_file)
-                                logger.info(f"[AUTO] Sorted granary file {sorted_file} now contains {len(df_granary)} records.")
-                            except Exception as g_e:
-                                logger.warning(f"[AUTO] Could not read sorted granary file {sorted_file}: {g_e}")
-                        else:
-                            logger.warning(f"[AUTO] Sorted granary file not found after sorting: {sorted_file}")
                         # Delete raw data file after sorting
                         try:
                             file_path.unlink()
@@ -132,9 +142,14 @@ async def lifespan(app: FastAPI):
                 # Preprocess each updated granary file
                 for granary_name in updated_granaries:
                     try:
-                        safe_granary_name = granary_name.encode('ascii', errors='ignore').decode('ascii') or 'granary'
-                        sorted_file = Path("service/data/granaries") / f"{safe_granary_name}_sorted.parquet"
-                        processed_file = Path("service/data/processed") / f"{safe_granary_name}_processed.parquet"
+                        # Sanitize granary_name for filesystem (remove only invalid characters)
+                        def sanitize_filename(name):
+                            # Remove only characters not allowed in Windows filenames
+                            invalid_chars = '<>:"/\\|?*'
+                            return ''.join(c for c in name if c not in invalid_chars).strip()
+                        sanitized_granary_name = sanitize_filename(granary_name) or 'granary'
+                        sorted_file = Path("service/data/granaries") / f"{sanitized_granary_name}_sorted.parquet"
+                        processed_file = Path("service/data/processed") / f"{sanitized_granary_name}_processed.parquet"
                         # Preprocess sorted granary file using streaming processor
                         from granarypredict.streaming_processor import MassiveDatasetProcessor
                         MassiveDatasetProcessor.process_file(str(sorted_file), str(processed_file))
