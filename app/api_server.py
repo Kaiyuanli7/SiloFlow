@@ -81,15 +81,29 @@ def forecast_endpoint(request: ForecastRequest):
         logger.info(f"   Granary ID: {granary_id}")
         logger.info(f"   Sub-table ID: {sub_table_id}")
 
-        # Step 2: Retrieve the data
-        df = retriever.get_silo_data(granary_id, silo_id, sub_table_id, start_date, end_date)
+        # Step 2: Retrieve the data (last 7 days, 14th day ago, 30th day ago)
+        today = datetime.now().date()
+        # Last 7 days (including today)
+        last_7_start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
+        last_7_end = today.strftime("%Y-%m-%d")
+        df_7 = retriever.get_silo_data(granary_id, silo_id, sub_table_id, last_7_start, last_7_end)
+        # 14th day ago
+        day_14 = (today - timedelta(days=14)).strftime("%Y-%m-%d")
+        df_14 = retriever.get_silo_data(granary_id, silo_id, sub_table_id, day_14, day_14)
+        # 30th day ago
+        day_30 = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        df_30 = retriever.get_silo_data(granary_id, silo_id, sub_table_id, day_30, day_30)
+        # Concatenate and deduplicate
+        df = pd.concat([df_7, df_14, df_30], ignore_index=True)
+        if not df.empty and "detection_time" in df.columns:
+            df = df.drop_duplicates(subset=[c for c in df.columns if c != "detection_time"] + ["detection_time"])
         if df.empty:
             logger.warning("No data found for the specified criteria.")
             raise HTTPException(status_code=404, detail="No data found for the specified criteria")
-        logger.info(f"Retrieved {len(df)} records from database.")
+        logger.info(f"Retrieved {len(df)} records from database (last 7 days, 14th, 30th day ago).")
         # Output raw pulled data as CSV for debugging
         try:
-            raw_csv_path = f"debug_raw_{granary_name}_{silo_id}_{start_date}_{end_date}.csv"
+            raw_csv_path = f"debug_raw_{granary_name}_{silo_id}_{last_7_start}_{last_7_end}_plus_14_30.csv"
             df.to_csv(raw_csv_path, index=False, encoding="utf-8-sig")
             logger.info(f"Raw pulled data written to {raw_csv_path}")
         except Exception as e:
