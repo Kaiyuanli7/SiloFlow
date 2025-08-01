@@ -240,86 +240,99 @@ class PolarsFeatures:
     """
     
     @staticmethod
-    def create_time_features_polars(df: pl.DataFrame, timestamp_col: str = "detection_time") -> pl.DataFrame:
-        """Polars-optimized time feature creation - 5-10x faster than pandas."""
-        return df.with_columns([
-            pl.col(timestamp_col).dt.year().alias("year"),
-            pl.col(timestamp_col).dt.month().alias("month"),
-            pl.col(timestamp_col).dt.day().alias("day"),
-            pl.col(timestamp_col).dt.hour().alias("hour"),
-            
-            # Cyclical encodings - vectorized in Polars
-            (2 * np.pi * pl.col(timestamp_col).dt.month() / 12).sin().alias("month_sin"),
-            (2 * np.pi * pl.col(timestamp_col).dt.month() / 12).cos().alias("month_cos"),
-            (2 * np.pi * pl.col(timestamp_col).dt.hour() / 24).sin().alias("hour_sin"),
-            (2 * np.pi * pl.col(timestamp_col).dt.hour() / 24).cos().alias("hour_cos"),
-            
-            # Day of year and week features
-            pl.col(timestamp_col).dt.ordinal_day().alias("doy"),
-            pl.col(timestamp_col).dt.week().alias("weekofyear"),
-            
-            # More cyclical encodings
-            (2 * np.pi * pl.col(timestamp_col).dt.ordinal_day() / 365).sin().alias("doy_sin"),
-            (2 * np.pi * pl.col(timestamp_col).dt.ordinal_day() / 365).cos().alias("doy_cos"),
-            (2 * np.pi * pl.col(timestamp_col).dt.week() / 52).sin().alias("woy_sin"),
-            (2 * np.pi * pl.col(timestamp_col).dt.week() / 52).cos().alias("woy_cos"),
-            
-            # Weekend indicator
-            (pl.col(timestamp_col).dt.weekday() >= 6).alias("is_weekend")
-        ])
+    def create_time_features_polars(df, timestamp_col: str = "detection_time"):
+        logger = logging.getLogger("PolarsFeatures")
+        logger.debug(f"[Polars] create_time_features_polars: input shape={df.shape}, columns={df.columns}")
+        try:
+            result = df.with_columns([
+                pl.col(timestamp_col).dt.year().alias("year"),
+                pl.col(timestamp_col).dt.month().alias("month"),
+                pl.col(timestamp_col).dt.day().alias("day"),
+                pl.col(timestamp_col).dt.hour().alias("hour"),
+                # Cyclical encodings - vectorized in Polars
+                (2 * np.pi * pl.col(timestamp_col).dt.month() / 12).sin().alias("month_sin"),
+                (2 * np.pi * pl.col(timestamp_col).dt.month() / 12).cos().alias("month_cos"),
+                (2 * np.pi * pl.col(timestamp_col).dt.hour() / 24).sin().alias("hour_sin"),
+                (2 * np.pi * pl.col(timestamp_col).dt.hour() / 24).cos().alias("hour_cos"),
+                # Day of year and week features
+                pl.col(timestamp_col).dt.ordinal_day().alias("doy"),
+                pl.col(timestamp_col).dt.week().alias("weekofyear"),
+                # More cyclical encodings
+                (2 * np.pi * pl.col(timestamp_col).dt.ordinal_day() / 365).sin().alias("doy_sin"),
+                (2 * np.pi * pl.col(timestamp_col).dt.ordinal_day() / 365).cos().alias("doy_cos"),
+                (2 * np.pi * pl.col(timestamp_col).dt.week() / 52).sin().alias("woy_sin"),
+                (2 * np.pi * pl.col(timestamp_col).dt.week() / 52).cos().alias("woy_cos"),
+                # Weekend indicator
+                (pl.col(timestamp_col).dt.weekday() >= 6).alias("is_weekend")
+            ])
+            logger.debug(f"[Polars] create_time_features_polars: output shape={result.shape}, columns={result.columns}")
+            return result
+        except Exception as e:
+            logger.error(f"[Polars] create_time_features_polars failed: {e}")
+            raise
     
     @staticmethod
-    def add_lags_polars(df: pl.DataFrame, 
+    def add_lags_polars(df, 
                        temp_col: str = "temperature_grain",
                        group_cols: list = None,
-                       lags: list = [1, 2, 3, 7]) -> pl.DataFrame:
-        """Polars-optimized lag feature creation - 10-50x faster than pandas."""
-        if group_cols is None:
-            group_cols = ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"]
-        
-        # Filter to existing columns
-        existing_group_cols = [col for col in group_cols if col in df.columns]
-        
-        if not existing_group_cols:
-            # No grouping columns, simple shift
-            lag_expressions = [
-                pl.col(temp_col).shift(lag).alias(f"lag_temp_{lag}d") 
-                for lag in lags
-            ]
-        else:
-            # Grouped lag operations - much faster in Polars
-            lag_expressions = [
-                pl.col(temp_col).shift(lag).over(existing_group_cols).alias(f"lag_temp_{lag}d")
-                for lag in lags
-            ]
-        
-        return df.with_columns(lag_expressions)
+                       lags: list = [1, 2, 3, 7]):
+        logger = logging.getLogger("PolarsFeatures")
+        logger.debug(f"[Polars] add_lags_polars: input shape={df.shape}, columns={df.columns}")
+        try:
+            if group_cols is None:
+                group_cols = ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"]
+            # Filter to existing columns
+            existing_group_cols = [col for col in group_cols if col in df.columns]
+            logger.debug(f"[Polars] add_lags_polars: using group_cols={existing_group_cols}, temp_col={temp_col}, lags={lags}")
+            if not existing_group_cols:
+                # No grouping columns, simple shift
+                lag_expressions = [
+                    pl.col(temp_col).shift(lag).alias(f"lag_temp_{lag}d") 
+                    for lag in lags
+                ]
+            else:
+                # Grouped lag operations - much faster in Polars
+                lag_expressions = [
+                    pl.col(temp_col).shift(lag).over(existing_group_cols).alias(f"lag_temp_{lag}d")
+                    for lag in lags
+                ]
+            result = df.with_columns(lag_expressions)
+            logger.debug(f"[Polars] add_lags_polars: output shape={result.shape}, columns={result.columns}")
+            return result
+        except Exception as e:
+            logger.error(f"[Polars] add_lags_polars failed: {e}")
+            raise
     
     @staticmethod
-    def add_rolling_stats_polars(df: pl.DataFrame,
+    def add_rolling_stats_polars(df,
                                 temp_col: str = "temperature_grain",
                                 group_cols: list = None,
-                                window_days: int = 7) -> pl.DataFrame:
-        """Polars-optimized rolling statistics - 5-20x faster than pandas."""
-        if group_cols is None:
-            group_cols = ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"]
-        
-        existing_group_cols = [col for col in group_cols if col in df.columns]
-        
-        if not existing_group_cols:
-            # No grouping
-            rolling_expressions = [
-                pl.col(temp_col).rolling_mean(window_days).alias(f"roll_mean_{window_days}d"),
-                pl.col(temp_col).rolling_std(window_days).alias(f"roll_std_{window_days}d")
-            ]
-        else:
-            # Grouped rolling operations
-            rolling_expressions = [
-                pl.col(temp_col).rolling_mean(window_days).over(existing_group_cols).alias(f"roll_mean_{window_days}d"),
-                pl.col(temp_col).rolling_std(window_days).over(existing_group_cols).alias(f"roll_std_{window_days}d")
-            ]
-        
-        return df.with_columns(rolling_expressions)
+                                window_days: int = 7):
+        logger = logging.getLogger("PolarsFeatures")
+        logger.debug(f"[Polars] add_rolling_stats_polars: input shape={df.shape}, columns={df.columns}")
+        try:
+            if group_cols is None:
+                group_cols = ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"]
+            existing_group_cols = [col for col in group_cols if col in df.columns]
+            logger.debug(f"[Polars] add_rolling_stats_polars: using group_cols={existing_group_cols}, temp_col={temp_col}, window_days={window_days}")
+            if not existing_group_cols:
+                # No grouping
+                rolling_expressions = [
+                    pl.col(temp_col).rolling_mean(window_days).alias(f"roll_mean_{window_days}d"),
+                    pl.col(temp_col).rolling_std(window_days).alias(f"roll_std_{window_days}d")
+                ]
+            else:
+                # Grouped rolling operations
+                rolling_expressions = [
+                    pl.col(temp_col).rolling_mean(window_days).over(existing_group_cols).alias(f"roll_mean_{window_days}d"),
+                    pl.col(temp_col).rolling_std(window_days).over(existing_group_cols).alias(f"roll_std_{window_days}d")
+                ]
+            result = df.with_columns(rolling_expressions)
+            logger.debug(f"[Polars] add_rolling_stats_polars: output shape={result.shape}, columns={result.columns}")
+            return result
+        except Exception as e:
+            logger.error(f"[Polars] add_rolling_stats_polars failed: {e}")
+            raise
 
 
 # Usage examples and integration helpers

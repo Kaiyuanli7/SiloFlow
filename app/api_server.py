@@ -160,7 +160,7 @@ def forecast_endpoint(request: ForecastRequest):
             processed_df = comprehensive_sort(df_grouped)
             logger.info(f"Comprehensive sort complete. Columns: {list(processed_df.columns)}")
             # Output processed data as CSV for debugging
-            processed_csv_path = f"debug_processed_{granary_name}_{silo_id}_{start_date}_{end_date}.csv"
+            processed_csv_path = f"debug_{granary_name}_{silo_id}_{start_date}_{end_date}_processed.csv"
             processed_df.to_csv(processed_csv_path, index=False, encoding="utf-8-sig")
             logger.info(f"Processed data written to {processed_csv_path}")
         except Exception as e:

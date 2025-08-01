@@ -623,22 +623,22 @@ def _t(msg: str) -> str:
 
 def _d(msg, use_toast=True):
     if not st.session_state.get("debug_mode"):
-        return
-    import streamlit as _st
-    if use_toast:
-        _st.toast(str(msg))
-    log = _st.session_state.setdefault("debug_msgs", [])
-    log.append(str(msg))
-
-# Add constant after imports
-ENV_COLUMNS = [
-    "temperature_inside",
-    "temperature_outside",
-    "humidity_warehouse",
-    "humidity_outside",
-]
-
-# Additional columns unavailable for real future dates that should be
+        try:
+            from granarypredict.polars_adapter import to_polars, to_pandas, PolarsFeatures
+            # Convert to Polars if not already
+            df_pl = to_polars(df)
+            # Example: time features, lags, rolling stats (customize as needed)
+            df_pl = PolarsFeatures.create_time_features_polars(df_pl)
+            df_pl = PolarsFeatures.add_lags_polars(df_pl)
+            df_pl = PolarsFeatures.add_rolling_stats_polars(df_pl)
+            # Convert back to Pandas for ML compatibility
+            df = to_pandas(df_pl)
+        except Exception as e:
+            logging.getLogger("Dashboard").warning(f"Polars preprocessing failed, using Pandas: {e}")
+            # Fallback: original Pandas-based preprocessing (implement as needed)
+            # ...existing pandas preprocessing code...
+            pass
+        # Do NOT return here! Continue with the rest of the Pandas-based pipeline below
 # removed when training a "future-safe" model.
 FUTURE_SAFE_EXTRA = [
     "max_temp",      # historic max air temp inside silo
@@ -1216,39 +1216,36 @@ def main():
             st.toast(f"Processing uploaded file: {uploaded_file.name}")
         else:
             st.toast("Processing uploaded file...")
-        
-        df = load_uploaded_file(uploaded_file)
-        _d(f"[DATA] Uploaded file loaded – shape={df.shape} cols={list(df.columns)[:10]}…")
-        # Removed display of raw DataFrame to avoid confusion; only show standardized (preprocessed) DataFrame below
 
-        # ------------------------------------------------------------------
-        # Auto-organise if the upload mixes multiple silos  (removed in v1.1)
-        # ------------------------------------------------------------------
-        # (functionality removed)
-        
+        # Always load, preprocess, and output processed Parquet regardless of input type
+        df_raw = load_uploaded_file(uploaded_file)
+        _d(f"[DATA] Uploaded file loaded – shape={df_raw.shape} cols={list(df_raw.columns)[:10]}…")
+
         # Full preprocessing once
         _d("Running full preprocessing on uploaded dataframe (cached)…")
         df = _get_preprocessed_df(uploaded_file)
         st.toast(f"Data preprocessing complete. Dataset shape: {df.shape}")
         _d(f"[DATA] Preprocessing complete – shape={df.shape} cols={list(df.columns)[:10]}…")
-        # Show only the standardized DataFrame
-        with st.expander(_t("Standardized Data"), expanded=True):
-            st.dataframe(df, use_container_width=True)
+# Show the true raw uploaded DataFrame (unchanged)
+        with st.expander(_t("Raw Uploaded Data (Unchanged)"), expanded=True):
+            if "raw_uploaded_df" in st.session_state:
+                st.dataframe(st.session_state["raw_uploaded_df"], use_container_width=True)
+            else:
+                st.info("Raw uploaded data not available.")
 
         # --- Save preprocessed data as Parquet (always) ---
         import os
         from granarypredict.ingestion import save_granary_data
-        base_name = os.path.splitext(os.path.basename(uploaded_file.name))[0]
+        base_name = os.path.splitext(os.path.basename(getattr(uploaded_file, 'name', str(uploaded_file))))[0]
         processed_dir = os.path.join("data", "processed")
         os.makedirs(processed_dir, exist_ok=True)
         processed_path = os.path.join(processed_dir, f"{base_name}_processed.parquet")
         save_granary_data(df, processed_path, format="parquet", compression="snappy")
         _d(f"[DATA] Saved preprocessed data as Parquet: {processed_path}")
 
-        # Display sorted table directly below Raw Data
-        df_sorted_display = df
+        # Display the full processed DataFrame directly below Raw Data
         with st.expander(_t("Sorted Data"), expanded=False):
-            _st_dataframe_safe(df_sorted_display, key="sorted")
+            _st_dataframe_safe(df, key="sorted")
 
         # ------------------------------
         # Global Warehouse → Silo filter
@@ -3919,7 +3916,33 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     _d("Starting column standardization...")
     from granarypredict.ingestion import standardize_granary_csv
     df = standardize_granary_csv(df)
+    # --- Extra: ensure all required columns are mapped ---
+    rename_map = {
+        # ID columns
+        'storepointId': 'granary_id',
+        'storeId': 'heap_id',
+        'x': 'grid_x',
+        'y': 'grid_y',
+        'z': 'grid_z',
+        # Time/temperature columns
+        'batch': 'detection_time',  # fallback if present
+        'temp': 'temperature_grain',
+        'indoor_temp': 'temperature_inside',
+        'avg_in_temp': 'avg_grain_temp',
+        'indoor_humidity': 'humidity_warehouse',
+        'outdoor_temp': 'temperature_outside',
+        'outdoor_humidity': 'humidity_outside',
+    }
+    # Only rename if not already present
+    for src, tgt in rename_map.items():
+        if src in df.columns and tgt not in df.columns:
+            df = df.rename(columns={src: tgt})
     _d(f"Column standardization complete: {list(df.columns)}")
+    # Debug: check for required columns
+    required_cols = ['granary_id','heap_id','grid_x','grid_y','grid_z','detection_time','temperature_grain']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        _d(f"[WARNING] Missing required columns after standardization: {missing}")
     
     _d("Starting basic_clean…")
     before_cols = list(df.columns)
@@ -3929,32 +3952,72 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     try:
         from granarypredict.polars_adapter import to_polars, to_pandas, PolarsFeatures
         import polars as pl
-        # Convert to Polars if not already
         df_pl = to_polars(df)
-        # Example: time features, lags, rolling stats (customize as needed)
         df_pl = PolarsFeatures.create_time_features_polars(df_pl)
         df_pl = PolarsFeatures.add_lags_polars(df_pl)
         df_pl = PolarsFeatures.add_rolling_stats_polars(df_pl)
-        # Convert back to Pandas for ML compatibility
         df = to_pandas(df_pl)
+        _d(f"Polars feature engineering complete: shape={df.shape}, columns={list(df.columns)}")
     except Exception as e:
         import logging
         logging.getLogger("Dashboard").warning(f"Polars preprocessing failed, using Pandas: {e}")
-        # Fallback: original Pandas-based preprocessing (implement as needed)
-        # ...existing pandas preprocessing code...
-        pass
-    return df
-    # -------------------------------------------------------------
+        # Fallback: minimal Pandas feature engineering (match Polars columns)
+        from granarypredict.features import create_time_features, add_multi_lag, add_rolling_stats
+        df = create_time_features(df)
+        df = add_multi_lag(df, lags=[1,2,3,7])
+        df = add_rolling_stats(df, window_days=7)
+        _d(f"Pandas fallback feature engineering complete: shape={df.shape}, columns={list(df.columns)}")
+
+    # Continue with the rest of the robust pipeline (match API service)
     # 1️⃣ Insert missing calendar-day rows first
-    # -------------------------------------------------------------
     df = insert_calendar_gaps(df)
     _d("insert_calendar_gaps: added rows for missing dates")
 
-    # -------------------------------------------------------------
-    # 2️⃣ Interpolate numeric columns per sensor across the now-complete
-    #    timeline so gap rows take the average of surrounding real values.
-    # -------------------------------------------------------------
+    # 2️⃣ Interpolate numeric columns per sensor across the now-complete timeline
     df = interpolate_sensor_numeric(df)
+    _d("interpolate_sensor_numeric: interpolated missing values")
+
+    # 3️⃣ Final cleaning (if available)
+    if hasattr(cleaning, 'fill_missing'):
+        df = cleaning.fill_missing(df)
+        _d("fill_missing: filled missing values")
+
+    # 4️⃣ Additional feature engineering (directional, stability, horizon, etc.)
+    from granarypredict import features
+    if hasattr(features, 'add_directional_features_lean'):
+        df = features.add_directional_features_lean(df)
+        _d("add_directional_features_lean: added directional features")
+    if hasattr(features, 'add_stability_features'):
+        df = features.add_stability_features(df)
+        _d("add_stability_features: added stability features")
+    if hasattr(features, 'add_horizon_specific_directional_features'):
+        df = features.add_horizon_specific_directional_features(df, max_horizon=7)
+        _d("add_horizon_specific_directional_features: added horizon-specific features")
+    if hasattr(features, 'add_multi_horizon_targets'):
+        df = features.add_multi_horizon_targets(df, horizons=tuple(range(1,8)))
+        _d("add_multi_horizon_targets: added multi-horizon targets")
+
+    # 5️⃣ Sorting and grouping
+    if 'granary_id' in df.columns and 'heap_id' in df.columns:
+        df = assign_group_id(df)
+        _d("assign_group_id: assigned group ids")
+    if 'detection_time' in df.columns:
+        df = comprehensive_sort(df)
+        _d("comprehensive_sort: sorted by detection_time")
+
+    # 6️⃣ Column reordering (optional, match API service)
+    desired_order = [
+        'granary_id','address_cn','heap_id','detection_time','temperature_grain',
+        'grid_x','grid_y','grid_z',
+        'avg_grain_temp','max_temp','min_temp','temperature_inside','humidity_warehouse',
+        'temperature_outside','humidity_outside','warehouse_type'
+    ]
+    ordered_cols = [c for c in desired_order if c in df.columns]
+    remaining_cols = [c for c in df.columns if c not in ordered_cols]
+    final_order = ordered_cols + remaining_cols
+    df = df[final_order]
+    _d(f"Column reordering complete: {final_order}")
+    return df
     _d("interpolate_sensor_numeric: linear interpolation applied per sensor")
 
     # -------------------------------------------------------------
@@ -3979,30 +4042,33 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     # Add time-since-last-measurement features for data quality assessment
     df = features.add_time_since_last_measurement(df)
     _d("add_time_since_last_measurement: added data quality temporal features")
-    # lag features will be created inside add_multi_lag (includes 1-day)
+    # Ensure correct sorting and grouping before lag/rolling features
+    group_keys = [c for c in ["granary_id", "heap_id", "grid_x", "grid_y", "grid_z"] if c in df.columns]
+    if "detection_time" in df.columns:
+        df = df.sort_values(group_keys + ["detection_time"]) if group_keys else df.sort_values("detection_time")
+        _d(f"Sorted DataFrame by {group_keys + ['detection_time'] if group_keys else ['detection_time']}")
+    else:
+        _d("Warning: detection_time column missing before lag feature creation!")
 
-    # -------------------------------------------------------------
     # 4️⃣ Extra temperature features (multi-lag, rolling stats, delta) - PARALLEL VERSION
-    # -------------------------------------------------------------
-    df = features.add_multi_lag_parallel(df, lags=(1,2,3,4,5,6,7,14,30))
-    df = features.add_rolling_stats_parallel(df, window_days=7)
+    df = features.add_multi_lag_parallel(df, lags=(1,2,3,4,5,6,7,14,30), group_keys=group_keys if group_keys else None)
+    df = features.add_rolling_stats_parallel(df, window_days=7, group_keys=group_keys if group_keys else None)
+    # Debug: show null counts for lag columns
+    lag_cols = [c for c in df.columns if c.startswith("lag_temp_") or c.startswith("roll_")]
+    if lag_cols:
+        null_report = {c: int(df[c].isna().sum()) for c in lag_cols}
+        _d(f"Lag/Rolling columns nulls: {null_report}")
     _d("add_multi_lag_parallel & add_rolling_stats_parallel: extra features added with multiprocessing")
-    
-    # -------------------------------------------------------------
+
     # 4.5️⃣ Lean directional features for temperature movement prediction
-    # -------------------------------------------------------------
     df = features.add_directional_features_lean(df)
     _d("add_directional_features_lean: 6 directional features added for trend prediction")
-    
-    # -------------------------------------------------------------
+
     # 4.6️⃣ Stability features for conservative temperature prediction - PARALLEL VERSION
-    # -------------------------------------------------------------
     df = features.add_stability_features_parallel(df)
     _d("add_stability_features_parallel: 8 stability features added for conservative predictions with multiprocessing")
-    
-    # -------------------------------------------------------------
+
     # 4.7️⃣ Horizon-specific directional features for multi-model accuracy
-    # -------------------------------------------------------------
     df = features.add_horizon_specific_directional_features(df, max_horizon=HORIZON_DAYS)
     _d(f"add_horizon_specific_directional_features: Enhanced directional features for {HORIZON_DAYS}-day forecasting added")
 
@@ -4033,10 +4099,14 @@ def _preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------
 
 def _get_active_df(uploaded_file):
-    """Return the raw dataframe – organised slice concat if available."""
+    """Return the raw dataframe – organized slice concat if available. Also store the true raw DataFrame in session_state for display."""
     if st.session_state.get("organized_df") is not None:
-        return st.session_state["organized_df"].copy()
-    return load_uploaded_file(uploaded_file)
+        raw_df = st.session_state["organized_df"].copy()
+    else:
+        raw_df = load_uploaded_file(uploaded_file)
+    # Store the true raw DataFrame for display before any standardization or processing
+    st.session_state["raw_uploaded_df"] = raw_df.copy()
+    return raw_df
 
 
 # ---------------------------------------------------------------------
@@ -4052,8 +4122,8 @@ def _get_preprocessed_df(uploaded_file):
     """Return a fully-preprocessed dataframe (cached in session)."""
     # --------------------------------------------------------
     # 0️⃣ Fast-path: if the uploaded file is already a processed
-    #    CSV (name ends with _processed.csv or resides in data/processed),
-    #    simply load and return it.
+    #    CSV or Parquet (name ends with _processed.csv or _processed.parquet),
+    #    simply load and return it. Otherwise, always preprocess and output a _processed.parquet.
     # --------------------------------------------------------
     if _looks_processed(uploaded_file):
         try:
@@ -4070,44 +4140,36 @@ def _get_preprocessed_df(uploaded_file):
                     df_fast = pd.read_parquet(uploaded_file)
                 else:
                     df_fast = pd.read_csv(uploaded_file, encoding="utf-8")
-            
             # Check if standardization is needed (for old processed files)
             if 'detection_time' not in df_fast.columns:
                 _d("⚠️ Preprocessed file missing standardized columns, applying standardization...")
                 from granarypredict.ingestion import standardize_granary_csv
                 df_fast = standardize_granary_csv(df_fast)
                 _d(f"Applied standardization to processed file: {list(df_fast.columns)[:5]}...")
-            
             st.session_state["processed_df"] = df_fast.copy()
             return df_fast
         except Exception as exc:
             _d(f"Could not load preprocessed file fast-path: {exc}; falling back to pipeline")
 
+    # For any other file (raw CSV or Parquet), always preprocess and output a _processed.parquet
     raw_df = _get_active_df(uploaded_file)
-
-    # Use cached preprocessing to avoid repeating heavy work across reruns
+    # At this point, st.session_state["raw_uploaded_df"] contains the true raw DataFrame
     proc = _preprocess_cached(raw_df)
     _d("🔄 Received dataframe from _preprocess_cached (may be cache hit or miss)")
-
-    # --------------------------------------------------------
-    # Persist a processed CSV alongside others for future fast-path
-    # --------------------------------------------------------
+    # Persist a processed Parquet alongside others for future fast-path
     try:
         if hasattr(uploaded_file, "name"):
             orig_name = pathlib.Path(uploaded_file.name).stem
         else:
             orig_name = pathlib.Path(uploaded_file).stem if isinstance(uploaded_file, (str, pathlib.Path)) else "uploaded"
-
         processed_dir = pathlib.Path("data/preloaded")
         processed_dir.mkdir(parents=True, exist_ok=True)
         out_parquet = processed_dir / f"{orig_name}_processed.parquet"
-        if not out_parquet.exists():
-            from granarypredict.ingestion import save_granary_data
-            save_granary_data(proc, out_parquet, format="parquet", compression="snappy")
-            _d(f"💾 Saved processed Parquet to {out_parquet}")
+        from granarypredict.ingestion import save_granary_data
+        save_granary_data(proc, out_parquet, format="parquet", compression="snappy")
+        _d(f"💾 Saved processed Parquet to {out_parquet}")
     except Exception as exc:
-        _d(f"Could not persist processed CSV: {exc}")
-
+        _d(f"Could not persist processed Parquet: {exc}")
     st.session_state["processed_df"] = proc.copy()
     return proc
 
@@ -4134,7 +4196,8 @@ def _looks_processed(upload):
     """Return True if *upload* path or name suggests preprocessed dataset."""
     if isinstance(upload, (str, pathlib.Path)):
         p = pathlib.Path(upload)
-        if "data/processed" in p.as_posix() or p.name.endswith("_processed.csv") or p.name.endswith("_processed.parquet"):
+        # Only treat as processed if the filename ends with _processed.csv or _processed.parquet
+        if p.name.endswith("_processed.csv") or p.name.endswith("_processed.parquet"):
             return True
     elif hasattr(upload, "name"):
         name = upload.name

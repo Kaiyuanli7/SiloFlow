@@ -795,7 +795,7 @@ def select_feature_target_multi(
 def add_multi_lag_parallel(
     df: pd.DataFrame,
     *,
-    lags: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7),
+    lags: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30),
     temp_col: str = "temperature_grain",
     timestamp_col: str = "detection_time",
     max_workers: int | None = None,
