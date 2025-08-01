@@ -681,27 +681,58 @@ PRELOADED_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 def load_uploaded_file(uploaded_file) -> pd.DataFrame:
     """Load uploaded file with automatic format detection (CSV or Parquet)."""
+    import logging
+    logger = logging.getLogger("DashboardFileUpload")
     try:
         # Check file extension to determine format
-        file_extension = pathlib.Path(uploaded_file.name).suffix.lower()
-        
+        file_extension = None
+        file_name = getattr(uploaded_file, 'name', str(uploaded_file))
+        if hasattr(uploaded_file, 'name'):
+            file_extension = pathlib.Path(uploaded_file.name).suffix.lower()
+        elif isinstance(uploaded_file, (str, pathlib.Path)):
+            file_extension = pathlib.Path(str(uploaded_file)).suffix.lower()
+
+        logger.info(f"Attempting to load file: {file_name} (extension: {file_extension})")
+        _d(f"[LOAD] Attempting to load file: {file_name} (extension: {file_extension})")
+
+        # Always reset file pointer for StreamlitUploadedFile before reading
+        if hasattr(uploaded_file, 'seek'):
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+
         if file_extension == '.parquet':
-            # Load Parquet file
-            _d(f"[LOAD] Reading Parquet file: {uploaded_file.name}")
+            _d(f"[LOAD] Reading Parquet file: {file_name}")
+            if hasattr(uploaded_file, 'seek'):
+                uploaded_file.seek(0)
             df = pd.read_parquet(uploaded_file)
         elif file_extension in ['.csv', '.gz', '.gzip', '.bz2', '.zip', '.xz']:
-            # Load CSV file (including compressed)
-            _d(f"[LOAD] Reading data file: {uploaded_file.name}")
-            df = pd.read_csv(uploaded_file)
+            _d(f"[LOAD] Reading data file: {file_name}")
+            if hasattr(uploaded_file, 'seek'):
+                uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
         else:
-            # Try to read as CSV (fallback)
-            _d(f"[LOAD] Attempting to read as CSV: {uploaded_file.name}")
-            df = pd.read_csv(uploaded_file)
-        
+            # Try Parquet first, then CSV as fallback
+            try:
+                _d(f"[LOAD] Attempting to read as Parquet: {file_name}")
+                if hasattr(uploaded_file, 'seek'):
+                    uploaded_file.seek(0)
+                df = pd.read_parquet(uploaded_file)
+            except Exception as e_parquet:
+                logger.warning(f"Failed to read as Parquet: {file_name} | {e_parquet}")
+                _d(f"[LOAD] Attempting to read as CSV: {file_name}")
+                if hasattr(uploaded_file, 'seek'):
+                    uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+
         _d(f"[LOAD] Loaded {len(df)} rows, {len(df.columns)} columns")
+        logger.info(f"Successfully loaded file: {file_name} | shape: {df.shape}")
         return df
-        
+
     except Exception as e:
+        logger.error(f"Error loading file: {getattr(uploaded_file, 'name', uploaded_file)} | Exception: {e}", exc_info=True)
+        _d(f"[ERROR] Error loading file: {getattr(uploaded_file, 'name', uploaded_file)} | Exception: {e}")
         st.error(f"Error loading file: {e}")
         return pd.DataFrame()
 
@@ -1188,8 +1219,7 @@ def main():
         
         df = load_uploaded_file(uploaded_file)
         _d(f"[DATA] Uploaded file loaded – shape={df.shape} cols={list(df.columns)[:10]}…")
-        with st.expander(_t("Raw Data"), expanded=False):
-            st.dataframe(df, use_container_width=True)
+        # Removed display of raw DataFrame to avoid confusion; only show standardized (preprocessed) DataFrame below
 
         # ------------------------------------------------------------------
         # Auto-organise if the upload mixes multiple silos  (removed in v1.1)
@@ -1201,6 +1231,9 @@ def main():
         df = _get_preprocessed_df(uploaded_file)
         st.toast(f"Data preprocessing complete. Dataset shape: {df.shape}")
         _d(f"[DATA] Preprocessing complete – shape={df.shape} cols={list(df.columns)[:10]}…")
+        # Show only the standardized DataFrame
+        with st.expander(_t("Standardized Data"), expanded=True):
+            st.dataframe(df, use_container_width=True)
 
         # --- Save preprocessed data as Parquet (always) ---
         import os
